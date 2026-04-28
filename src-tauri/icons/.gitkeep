@@ -1,0 +1,12 @@
+# Tauri requires the `icons/` directory but the binary placeholder PNG/ICO/ICNS
+# files are non-text and cannot live in this repo without being checked in as
+# binary blobs. Run the following on your dev machine after cloning to
+# generate a default icon set:
+#
+#     cd client
+#     pnpm tauri icon path/to/source-1024.png
+#
+# Until then, `pnpm tauri dev` will work (icons are only required at bundle
+# time), but `pnpm tauri build` will fail on the missing icon files.
+#
+# This file exists solely to keep the `icons/` directory tracked by git.
