@@ -79,6 +79,18 @@ export default function ChatArea() {
         </div>
       </Show>
 
+      <Show when={currentThread()}>
+        {(t) => (
+          <div class="flex items-center gap-2 border-b border-neutral-200 bg-neutral-50 px-4 py-2 text-xs text-neutral-600 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2 py-0.5 font-medium text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">
+              <span class="h-1.5 w-1.5 rounded-full bg-blue-500" />
+              {t().agent}
+            </span>
+            <span>Agent is fixed for this chat. Start a new chat to switch.</span>
+          </div>
+        )}
+      </Show>
+
       <div ref={scrollEl} class="flex-1 overflow-y-auto px-4 py-6">
         <Show
           when={currentThread()}
