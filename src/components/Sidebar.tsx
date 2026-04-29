@@ -2,6 +2,7 @@ import { For, Show, createMemo } from "solid-js";
 import {
   deleteThread,
   newThread,
+  toggleFilesDrawer,
   setCurrentThread,
   store,
   updateSettings,
@@ -105,6 +106,16 @@ export default function Sidebar(props: Props) {
       </div>
 
       <div class="border-t border-neutral-200 p-3 dark:border-neutral-800">
+        <button
+          class="mb-2 flex w-full items-center justify-center gap-2 rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-200 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
+          classList={{
+            "bg-neutral-200 dark:bg-neutral-800":
+              store.filesDrawer.open && store.filesDrawer.agent === currentAgent(),
+          }}
+          onClick={() => toggleFilesDrawer(currentAgent())}
+        >
+          📁 Files
+        </button>
         <button
           class="flex w-full items-center justify-center gap-2 rounded border border-neutral-300 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-200 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-800"
           onClick={() => props.onOpenSettings()}

@@ -9,12 +9,22 @@ export type AgUiEvent =
   | { type: "TEXT_MESSAGE_START"; messageId: string; role: "assistant" }
   | { type: "TEXT_MESSAGE_CONTENT"; messageId: string; delta: string }
   | { type: "TEXT_MESSAGE_END"; messageId: string }
+  | { type: "CUSTOM"; name: string; value: unknown }
   | { type: "RUN_FINISHED"; threadId: string; runId: string }
   | { type: "RUN_ERROR"; threadId: string; runId: string; message: string }
   // Synthetic frame inserted by the hub when the client's Last-Event-ID
   // points before the start of the retained ring. Carries no event id;
   // the client should restart the run instead of resuming.
   | { type: "RUN_LAGGED" };
+
+export interface FileEntry {
+  path: string;
+  name: string;
+  sizeBytes: number;
+  mtimeMs: number;
+  mime?: string;
+  isDir: boolean;
+}
 
 export interface RunRequestBody {
   threadId: string;
@@ -40,6 +50,16 @@ export interface StreamHandle {
 function authHeaders(settings: Settings): HeadersInit {
   const headers: Record<string, string> = {
     Accept: "text/event-stream",
+  };
+  if (settings.bearerToken) {
+    headers["Authorization"] = `Bearer ${settings.bearerToken}`;
+  }
+  return headers;
+}
+
+function authRequestHeaders(settings: Settings, accept: string): HeadersInit {
+  const headers: Record<string, string> = {
+    Accept: accept,
   };
   if (settings.bearerToken) {
     headers["Authorization"] = `Bearer ${settings.bearerToken}`;
@@ -164,4 +184,84 @@ function decodeFrame(frame: SseFrame): AgUiEvent | null {
 
 function trimSlash(s: string): string {
   return s.endsWith("/") ? s.slice(0, -1) : s;
+}
+
+function fileApiUrl(settings: Settings, endpoint: string, agent: string, path?: string): string {
+  const url = new URL(`${trimSlash(settings.gatewayUrl)}${endpoint}`);
+  url.searchParams.set("agent", agent);
+  if (path !== undefined) {
+    url.searchParams.set("path", path);
+  }
+  return url.toString();
+}
+
+async function responseError(resp: Response): Promise<Error> {
+  const fallback = `gateway returned HTTP ${resp.status}`;
+  const contentType = resp.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    try {
+      const body = (await resp.json()) as { error?: unknown };
+      if (typeof body.error === "string" && body.error.length > 0) {
+        return new Error(body.error);
+      }
+    } catch {
+      return new Error(fallback);
+    }
+  }
+  try {
+    const text = (await resp.text()).trim();
+    if (text.length > 0) {
+      return new Error(text);
+    }
+  } catch {
+    return new Error(fallback);
+  }
+  return new Error(fallback);
+}
+
+export async function listFiles(
+  settings: Settings,
+  agent: string,
+): Promise<{ files: FileEntry[]; truncated: boolean }> {
+  const resp = await fetch(fileApiUrl(settings, "/v1/files", agent), {
+    method: "GET",
+    headers: authRequestHeaders(settings, "application/json"),
+  });
+  if (!resp.ok) {
+    throw await responseError(resp);
+  }
+  const body = (await resp.json()) as { files?: FileEntry[]; truncated?: boolean };
+  return {
+    files: Array.isArray(body.files) ? body.files : [],
+    truncated: body.truncated === true,
+  };
+}
+
+export async function downloadFile(
+  settings: Settings,
+  agent: string,
+  path: string,
+): Promise<Blob> {
+  const resp = await fetch(fileApiUrl(settings, "/v1/files/content", agent, path), {
+    method: "GET",
+    headers: authRequestHeaders(settings, "*/*"),
+  });
+  if (!resp.ok) {
+    throw await responseError(resp);
+  }
+  return resp.blob();
+}
+
+export async function deleteFile(
+  settings: Settings,
+  agent: string,
+  path: string,
+): Promise<void> {
+  const resp = await fetch(fileApiUrl(settings, "/v1/files", agent, path), {
+    method: "DELETE",
+    headers: authRequestHeaders(settings, "application/json"),
+  });
+  if (!resp.ok) {
+    throw await responseError(resp);
+  }
 }

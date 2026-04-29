@@ -26,6 +26,16 @@ export interface Message {
   // from "complete" without a separate flag on the thread.
   streaming?: boolean;
   errorMessage?: string;
+  fileArtifacts?: FileArtifact[];
+}
+
+export interface FileArtifact {
+  path: string;
+  name: string;
+  sizeBytes: number;
+  mime?: string;
+  operation: "created" | "modified";
+  deleted?: boolean;
 }
 
 export interface Thread {

@@ -11,11 +11,15 @@ import {
   type Thread,
 } from "./lib/storage";
 import {
+  deleteFile,
+  listFiles,
   postRun,
   resumeRun,
   type AgUiEvent,
+  type FileEntry,
   type StreamHandle,
 } from "./lib/api";
+import type { FileArtifact } from "./lib/storage";
 
 // One Solid store for all UI-relevant state. Persistence is fanned out
 // to localStorage in `persist*` helpers — we don't observe the whole
@@ -31,6 +35,14 @@ interface AppState {
   lastEventSeq: string | undefined;
   // Surfaced to UI as a transient banner; cleared on next user action.
   errorBanner: string | null;
+  filesDrawer: {
+    open: boolean;
+    agent: string | null;
+    entries: FileEntry[];
+    loadingState: "idle" | "loading" | "error";
+    errorMessage: string | null;
+    truncated: boolean;
+  };
 }
 
 const initialBundle = loadThreadsBundle();
@@ -41,6 +53,14 @@ const [state, setState] = createStore<AppState>({
   isStreaming: false,
   lastEventSeq: undefined,
   errorBanner: null,
+  filesDrawer: {
+    open: false,
+    agent: null,
+    entries: [],
+    loadingState: "idle",
+    errorMessage: null,
+    truncated: false,
+  },
 });
 
 // Track the in-flight stream handle so we can abort on user actions
@@ -95,6 +115,79 @@ export function updateSettings(s: Settings): void {
 
 export function clearErrorBanner(): void {
   setState("errorBanner", null);
+}
+
+export function toggleFilesDrawer(agent: string): void {
+  if (state.filesDrawer.open && state.filesDrawer.agent === agent) {
+    closeFilesDrawer();
+    return;
+  }
+  openFilesDrawer(agent);
+}
+
+export function openFilesDrawer(agent: string): void {
+  setState(
+    produce((s: AppState) => {
+      s.filesDrawer.open = true;
+      s.filesDrawer.agent = agent;
+      s.filesDrawer.errorMessage = null;
+    }),
+  );
+  void refreshFiles();
+}
+
+export function closeFilesDrawer(): void {
+  setState(
+    produce((s: AppState) => {
+      s.filesDrawer.open = false;
+      s.filesDrawer.loadingState = "idle";
+      s.filesDrawer.errorMessage = null;
+    }),
+  );
+}
+
+export async function refreshFiles(): Promise<void> {
+  const agent = state.filesDrawer.agent;
+  if (!agent) return;
+  setState(
+    produce((s: AppState) => {
+      s.filesDrawer.loadingState = "loading";
+      s.filesDrawer.errorMessage = null;
+    }),
+  );
+  try {
+    const result = await listFiles(state.settings, agent);
+    setState(
+      produce((s: AppState) => {
+        if (s.filesDrawer.agent !== agent) return;
+        s.filesDrawer.entries = result.files;
+        s.filesDrawer.truncated = result.truncated;
+        s.filesDrawer.loadingState = "idle";
+        s.filesDrawer.errorMessage = null;
+      }),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    setState(
+      produce((s: AppState) => {
+        if (s.filesDrawer.agent !== agent) return;
+        s.filesDrawer.loadingState = "error";
+        s.filesDrawer.errorMessage = message;
+      }),
+    );
+  }
+}
+
+export async function deleteWorkspaceFile(agent: string, path: string): Promise<void> {
+  await deleteFile(state.settings, agent, path);
+  markFileDeleted(agent, path);
+  setState(
+    produce((s: AppState) => {
+      if (s.filesDrawer.agent !== agent) return;
+      s.filesDrawer.entries = s.filesDrawer.entries.filter((entry) => entry.path !== path);
+    }),
+  );
+  persistThreads();
 }
 
 /**
@@ -240,6 +333,24 @@ function handleEvent(
         m.streaming = false;
       });
       return;
+    case "CUSTOM":
+      if (ev.name !== "ui:file_artifact") return;
+      const artifact = parseFileArtifact(ev.value);
+      if (!artifact) return;
+      mutateMessage(threadId, assistantMsgId, (m) => {
+        const list = m.fileArtifacts ?? (m.fileArtifacts = []);
+        list.push(artifact);
+      });
+      bumpThreadUpdated(threadId);
+      persistThreads();
+      if (
+        state.filesDrawer.open &&
+        state.filesDrawer.agent !== null &&
+        state.filesDrawer.agent === threadAgent(threadId)
+      ) {
+        void refreshFiles();
+      }
+      return;
     case "RUN_FINISHED":
       setState("isStreaming", false);
       activeRunId = null;
@@ -283,6 +394,10 @@ function abortActiveStream(): void {
 function currentThread(): Thread | undefined {
   if (!state.currentThreadId) return undefined;
   return state.threads.find((t) => t.id === state.currentThreadId);
+}
+
+function threadAgent(threadId: string): string | null {
+  return state.threads.find((t) => t.id === threadId)?.agent ?? null;
 }
 
 function appendMessages(threadId: string, msgs: Message[]): void {
@@ -339,6 +454,44 @@ function bumpThreadUpdated(threadId: string): void {
     (t) => t.id === threadId,
     "updatedAtMs",
     Date.now(),
+  );
+}
+
+function parseFileArtifact(value: unknown): FileArtifact | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.path !== "string" || obj.path.length === 0) return null;
+  if (typeof obj.name !== "string" || obj.name.length === 0) return null;
+  if (typeof obj.sizeBytes !== "number" || !Number.isFinite(obj.sizeBytes) || obj.sizeBytes < 0) {
+    return null;
+  }
+  if (obj.mime !== undefined && typeof obj.mime !== "string") return null;
+  if (obj.operation !== "created" && obj.operation !== "modified") return null;
+  return {
+    path: obj.path,
+    name: obj.name,
+    sizeBytes: Math.floor(obj.sizeBytes),
+    mime: typeof obj.mime === "string" ? obj.mime : undefined,
+    operation: obj.operation,
+    deleted: false,
+  };
+}
+
+function markFileDeleted(agent: string, path: string): void {
+  setState(
+    produce((s: AppState) => {
+      for (const thread of s.threads) {
+        if (thread.agent !== agent) continue;
+        for (const message of thread.messages) {
+          if (!message.fileArtifacts) continue;
+          for (const artifact of message.fileArtifacts) {
+            if (artifact.path === path) {
+              artifact.deleted = true;
+            }
+          }
+        }
+      }
+    }),
   );
 }
 

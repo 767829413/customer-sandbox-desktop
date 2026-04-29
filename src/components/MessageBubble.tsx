@@ -1,9 +1,11 @@
-import { Show, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { renderMarkdown } from "../lib/markdown";
 import type { Message } from "../lib/storage";
+import FileArtifactChip from "./extensions/FileArtifactChip";
 
 interface Props {
   message: Message;
+  agent: string;
 }
 
 export default function MessageBubble(props: Props) {
@@ -42,6 +44,13 @@ export default function MessageBubble(props: Props) {
         <Show when={props.message.errorMessage}>
           <div class="mt-2 rounded bg-red-100 px-2 py-1 text-xs text-red-700 dark:bg-red-900/40 dark:text-red-200">
             {props.message.errorMessage}
+          </div>
+        </Show>
+        <Show when={(props.message.fileArtifacts?.length ?? 0) > 0}>
+          <div class="mt-2 flex flex-col gap-1.5">
+            <For each={props.message.fileArtifacts}>
+              {(artifact) => <FileArtifactChip artifact={artifact} agent={props.agent} />}
+            </For>
           </div>
         </Show>
       </div>
