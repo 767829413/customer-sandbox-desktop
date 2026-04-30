@@ -49,6 +49,11 @@ export interface StreamHandle {
 
 export type ApprovalDecision = "approve" | "deny" | "approve_all" | "deny_all";
 
+export interface AgentCatalog {
+  agents: string[];
+  defaultAgent: string;
+}
+
 function authHeaders(settings: Settings): HeadersInit {
   const headers: Record<string, string> = {
     Accept: "text/event-stream",
@@ -236,6 +241,23 @@ export async function listFiles(
   return {
     files: Array.isArray(body.files) ? body.files : [],
     truncated: body.truncated === true,
+  };
+}
+
+export async function listAgents(settings: Settings): Promise<AgentCatalog> {
+  const resp = await fetch(`${trimSlash(settings.gatewayUrl)}/v1/agents`, {
+    method: "GET",
+    headers: authRequestHeaders(settings, "application/json"),
+  });
+  if (!resp.ok) {
+    throw await responseError(resp);
+  }
+  const body = (await resp.json()) as { agents?: unknown; defaultAgent?: unknown };
+  return {
+    agents: Array.isArray(body.agents)
+      ? body.agents.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+      : [],
+    defaultAgent: typeof body.defaultAgent === "string" ? body.defaultAgent : "zeptoclaw",
   };
 }
 

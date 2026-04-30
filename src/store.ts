@@ -13,6 +13,7 @@ import {
 } from "./lib/storage";
 import {
   deleteFile,
+  listAgents,
   listFiles,
   postApprovalResponse,
   postRun,
@@ -30,6 +31,7 @@ import type { FileArtifact } from "./lib/storage";
 
 interface AppState {
   settings: Settings;
+  availableAgents: string[];
   threads: Thread[];
   currentThreadId: string | null;
   isStreaming: boolean;
@@ -48,9 +50,11 @@ interface AppState {
   };
 }
 
+const initialSettings = loadSettings();
 const initialBundle = loadThreadsBundle();
 const [state, setState] = createStore<AppState>({
-  settings: loadSettings(),
+  settings: initialSettings,
+  availableAgents: [initialSettings.defaultAgent],
   threads: initialBundle.threads,
   currentThreadId: initialBundle.currentThreadId,
   isStreaming: false,
@@ -73,6 +77,7 @@ let activeRunId: string | null = null;
 const activeRunIdByThread = new Map<string, string>();
 
 export const store = state;
+void refreshAvailableAgents(initialSettings);
 
 export function setCurrentThread(threadId: string): void {
   setState("currentThreadId", threadId);
@@ -115,10 +120,40 @@ export function deleteThread(threadId: string): void {
 export function updateSettings(s: Settings): void {
   setState("settings", s);
   saveSettings(s);
+  void refreshAvailableAgents(s);
 }
 
 export function clearErrorBanner(): void {
   setState("errorBanner", null);
+}
+
+function normalizeAgents(agents: string[], fallback: string): string[] {
+  const out: string[] = [];
+  for (const raw of agents) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    if (out.includes(trimmed)) continue;
+    out.push(trimmed);
+  }
+  if (out.length === 0) {
+    out.push(fallback.trim() || "zeptoclaw");
+  }
+  return out;
+}
+
+export async function refreshAvailableAgents(settingsOverride?: Settings): Promise<void> {
+  const settings = settingsOverride ?? state.settings;
+  if (!settings.gatewayUrl.trim() || !settings.bearerToken.trim()) {
+    setState("availableAgents", normalizeAgents([], settings.defaultAgent));
+    return;
+  }
+  try {
+    const catalog = await listAgents(settings);
+    setState("availableAgents", normalizeAgents(catalog.agents, catalog.defaultAgent));
+  } catch {
+    // Keep UX stable on transient errors; settings dialog surfaces details.
+    setState("availableAgents", normalizeAgents([], settings.defaultAgent));
+  }
 }
 
 export function toggleFilesDrawer(agent: string): void {

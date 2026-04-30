@@ -1,4 +1,6 @@
-import { Show, createSignal } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { listAgents } from "../lib/api";
+import type { Settings } from "../lib/storage";
 import { store, updateSettings } from "../store";
 
 interface Props {
@@ -13,7 +15,13 @@ export default function SettingsDialog(props: Props) {
   const [gatewayUrl, setGatewayUrl] = createSignal(store.settings.gatewayUrl);
   const [bearerToken, setBearerToken] = createSignal(store.settings.bearerToken);
   const [defaultAgent, setDefaultAgent] = createSignal(store.settings.defaultAgent);
+  const [availableAgents, setAvailableAgents] = createSignal(
+    store.availableAgents.length > 0 ? store.availableAgents : [store.settings.defaultAgent],
+  );
+  const [agentsLoading, setAgentsLoading] = createSignal(false);
+  const [agentsError, setAgentsError] = createSignal<string | null>(null);
   const [showToken, setShowToken] = createSignal(false);
+  let loadSeq = 0;
 
   // Re-sync when the dialog re-opens after an external change.
   // (Cheap: this component is rendered behind a `<Show when=…>` that
@@ -21,10 +29,17 @@ export default function SettingsDialog(props: Props) {
 
   const handleSave = (ev: Event) => {
     ev.preventDefault();
+    const trimmedGateway = gatewayUrl().trim();
+    const trimmedToken = bearerToken().trim();
+    const options = availableAgents();
+    const selected = defaultAgent().trim();
+    const nextAgent = options.includes(selected)
+      ? selected
+      : options[0] ?? store.settings.defaultAgent ?? "zeptoclaw";
     updateSettings({
-      gatewayUrl: gatewayUrl().trim(),
-      bearerToken: bearerToken().trim(),
-      defaultAgent: defaultAgent().trim() || "zeptoclaw",
+      gatewayUrl: trimmedGateway,
+      bearerToken: trimmedToken,
+      defaultAgent: nextAgent,
     });
     props.onClose();
   };
@@ -32,6 +47,59 @@ export default function SettingsDialog(props: Props) {
   const handleKeydown = (ev: KeyboardEvent) => {
     if (ev.key === "Escape") props.onClose();
   };
+
+  const loadAgents = async (settings: Settings) => {
+    const seq = ++loadSeq;
+    const url = settings.gatewayUrl.trim();
+    const token = settings.bearerToken.trim();
+    if (!url || !token) {
+      setAgentsLoading(false);
+      setAgentsError(null);
+      setAvailableAgents(store.availableAgents.length > 0 ? store.availableAgents : []);
+      return;
+    }
+    setAgentsLoading(true);
+    setAgentsError(null);
+    try {
+      const catalog = await listAgents(settings);
+      if (seq !== loadSeq) return;
+      setAvailableAgents(catalog.agents);
+      if (catalog.agents.length === 0) {
+        setAgentsError("Gateway 没有返回可用 agent。");
+      } else if (!catalog.agents.includes(defaultAgent())) {
+        setDefaultAgent(
+          catalog.agents.includes(catalog.defaultAgent) ? catalog.defaultAgent : catalog.agents[0],
+        );
+      }
+    } catch (err) {
+      if (seq !== loadSeq) return;
+      const raw = err instanceof Error ? err.message : String(err);
+      setAvailableAgents([]);
+      setAgentsError(
+        raw.includes("HTTP 404")
+          ? "Gateway 当前版本不支持 /v1/agents，请升级 gateway。"
+          : `拉取 agent 失败：${raw}`,
+      );
+    } finally {
+      if (seq === loadSeq) {
+        setAgentsLoading(false);
+      }
+    }
+  };
+
+  createEffect(() => {
+    if (!props.open) return;
+    const url = gatewayUrl().trim();
+    const token = bearerToken().trim();
+    const timer = setTimeout(() => {
+      void loadAgents({
+        gatewayUrl: url,
+        bearerToken: token,
+        defaultAgent: store.settings.defaultAgent,
+      });
+    }, 300);
+    onCleanup(() => clearTimeout(timer));
+  });
 
   return (
     <Show when={props.open}>
@@ -91,19 +159,25 @@ export default function SettingsDialog(props: Props) {
 
           <label class="block pb-4">
             <span class="block pb-1 text-sm font-medium">Default agent</span>
-            <input
-              type="text"
-              required
-              placeholder="zeptoclaw"
+            <select
               value={defaultAgent()}
-              onInput={(e) => setDefaultAgent(e.currentTarget.value)}
+              onChange={(e) => setDefaultAgent(e.currentTarget.value)}
+              disabled={agentsLoading() || availableAgents().length === 0}
               class="w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-neutral-700 dark:bg-neutral-800"
-            />
+            >
+              <Show when={availableAgents().length > 0} fallback={<option value="">(no agents)</option>}>
+                <For each={availableAgents()}>{(agent) => <option value={agent}>{agent}</option>}</For>
+              </Show>
+            </select>
             <span class="mt-1 block text-xs text-neutral-500">
-              Used for new chats. Currently the gateway's
-              <code> [agui].default_agent</code> always wins for now (see
-              step-7 plan §7).
+              填好 Gateway URL 和 Bearer token 后会自动拉取 agent 列表，再从下拉里选择。
             </span>
+            <Show when={agentsLoading()}>
+              <span class="mt-1 block text-xs text-neutral-500">Loading agents...</span>
+            </Show>
+            <Show when={agentsError()}>
+              {(msg) => <span class="mt-1 block text-xs text-red-600 dark:text-red-300">{msg()}</span>}
+            </Show>
           </label>
 
           <div class="flex justify-end gap-2 pt-2">

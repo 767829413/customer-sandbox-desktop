@@ -12,13 +12,14 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-const KNOWN_AGENTS = ["zeptoclaw", "codex"] as const;
-
 export default function Sidebar(props: Props) {
   // Threads sorted by recency. Solid will re-derive whenever a message
   // bumps `updatedAtMs`.
   const sorted = createMemo(() =>
     [...store.threads].sort((a, b) => b.updatedAtMs - a.updatedAtMs),
+  );
+  const selectableAgents = createMemo(() =>
+    store.availableAgents.length > 0 ? store.availableAgents : [store.settings.defaultAgent],
   );
 
   return (
@@ -48,7 +49,7 @@ export default function Sidebar(props: Props) {
             updateSettings({ ...store.settings, defaultAgent: next });
           }}
         >
-          <For each={KNOWN_AGENTS}>{(a) => <option value={a}>{a}</option>}</For>
+          <For each={selectableAgents()}>{(a) => <option value={a}>{a}</option>}</For>
         </select>
         <p class="mt-1 text-[10px] leading-snug">
           Applies to new chats. Current chat uses{" "}
