@@ -1,9 +1,11 @@
 import { For, Show, createMemo } from "solid-js";
 import { renderMarkdown } from "../lib/markdown";
 import type { Message } from "../lib/storage";
+import ApprovalCard from "./extensions/ApprovalCard";
 import FileArtifactChip from "./extensions/FileArtifactChip";
 
 interface Props {
+  threadId: string;
   message: Message;
   agent: string;
 }
@@ -44,6 +46,13 @@ export default function MessageBubble(props: Props) {
         <Show when={props.message.errorMessage}>
           <div class="mt-2 rounded bg-red-100 px-2 py-1 text-xs text-red-700 dark:bg-red-900/40 dark:text-red-200">
             {props.message.errorMessage}
+          </div>
+        </Show>
+        <Show when={(props.message.approvalRequests?.length ?? 0) > 0}>
+          <div class="mt-2 flex flex-col gap-1.5">
+            <For each={props.message.approvalRequests}>
+              {(approval) => <ApprovalCard threadId={props.threadId} approval={approval} />}
+            </For>
           </div>
         </Show>
         <Show when={(props.message.fileArtifacts?.length ?? 0) > 0}>

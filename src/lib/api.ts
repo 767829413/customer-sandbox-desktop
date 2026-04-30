@@ -47,6 +47,8 @@ export interface StreamHandle {
   abort: () => void;
 }
 
+export type ApprovalDecision = "approve" | "deny" | "approve_all" | "deny_all";
+
 function authHeaders(settings: Settings): HeadersInit {
   const headers: Record<string, string> = {
     Accept: "text/event-stream",
@@ -235,6 +237,31 @@ export async function listFiles(
     files: Array.isArray(body.files) ? body.files : [],
     truncated: body.truncated === true,
   };
+}
+
+export async function postApprovalResponse(
+  settings: Settings,
+  threadId: string,
+  body: {
+    runId: string;
+    requestId: string;
+    decision: ApprovalDecision;
+  },
+): Promise<void> {
+  const resp = await fetch(
+    `${trimSlash(settings.gatewayUrl)}/v1/threads/${encodeURIComponent(threadId)}/responses`,
+    {
+      method: "POST",
+      headers: {
+        ...authRequestHeaders(settings, "application/json"),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    throw await responseError(resp);
+  }
 }
 
 export async function downloadFile(

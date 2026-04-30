@@ -6,6 +6,7 @@ import {
   loadThreadsBundle,
   saveSettings,
   saveThreadsBundle,
+  type ApprovalRequestCard,
   type Message,
   type Settings,
   type Thread,
@@ -13,8 +14,10 @@ import {
 import {
   deleteFile,
   listFiles,
+  postApprovalResponse,
   postRun,
   resumeRun,
+  type ApprovalDecision,
   type AgUiEvent,
   type FileEntry,
   type StreamHandle,
@@ -67,6 +70,7 @@ const [state, setState] = createStore<AppState>({
 // (sending a new message, switching threads, etc).
 const [activeStream, setActiveStream] = createSignal<StreamHandle | null>(null);
 let activeRunId: string | null = null;
+const activeRunIdByThread = new Map<string, string>();
 
 export const store = state;
 
@@ -167,7 +171,10 @@ export async function refreshFiles(): Promise<void> {
       }),
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const rawMessage = err instanceof Error ? err.message : String(err);
+    const message = rawMessage.includes("HTTP 404")
+      ? "Gateway 当前版本不支持文件接口 (/v1/files)，请更新并重启 gateway。"
+      : rawMessage;
     setState(
       produce((s: AppState) => {
         if (s.filesDrawer.agent !== agent) return;
@@ -188,6 +195,22 @@ export async function deleteWorkspaceFile(agent: string, path: string): Promise<
     }),
   );
   persistThreads();
+}
+
+export async function respondApproval(
+  threadId: string,
+  requestId: string,
+  decision: ApprovalDecision,
+): Promise<void> {
+  const runId = activeRunIdByThread.get(threadId);
+  if (!runId) {
+    throw new Error("No active run for this thread.");
+  }
+  await postApprovalResponse(state.settings, threadId, {
+    runId,
+    requestId,
+    decision,
+  });
 }
 
 /**
@@ -239,6 +262,7 @@ export function sendMessage(content: string): void {
 
   const runId = newId();
   activeRunId = runId;
+  activeRunIdByThread.set(threadId, runId);
 
   const handle = postRun(
     state.settings,
@@ -251,7 +275,7 @@ export function sendMessage(content: string): void {
     {
       onEvent: (ev, seq) => handleEvent(threadId, assistantMsg.id, runId, ev, seq),
       onError: (err) => onStreamError(threadId, assistantMsg.id, runId, err),
-      onClose: () => onStreamClose(),
+      onClose: () => onStreamClose(threadId, runId),
     },
   );
   setActiveStream(handle);
@@ -282,21 +306,26 @@ function onStreamError(
         m.errorMessage = err2.message;
       });
       activeRunId = null;
+      activeRunIdByThread.delete(threadId);
       setActiveStream(null);
     },
-    onClose: () => onStreamClose(),
+    onClose: () => onStreamClose(threadId, runId),
   });
   setActiveStream(handle);
 }
 
-function onStreamClose(): void {
+function onStreamClose(threadId: string, runId: string): void {
   // Server closed the SSE channel. RUN_FINISHED / RUN_ERROR has
   // already cleaned up the per-message streaming flag — this just
   // releases the global spinner if it's still on.
+  if (activeRunId !== null && activeRunId !== runId) return;
   if (state.isStreaming) {
     setState("isStreaming", false);
   }
-  activeRunId = null;
+  if (activeRunId === runId) {
+    activeRunId = null;
+  }
+  activeRunIdByThread.delete(threadId);
   setActiveStream(null);
 }
 
@@ -313,7 +342,7 @@ function handleEvent(
   }
   switch (ev.type) {
     case "RUN_STARTED":
-      // No-op: we already spawned the assistant placeholder up front.
+      activeRunIdByThread.set(threadId, ev.runId);
       return;
     case "TEXT_MESSAGE_START":
       // Server-generated message id is the source of truth for
@@ -334,26 +363,43 @@ function handleEvent(
       });
       return;
     case "CUSTOM":
-      if (ev.name !== "ui:file_artifact") return;
-      const artifact = parseFileArtifact(ev.value);
-      if (!artifact) return;
-      mutateMessage(threadId, assistantMsgId, (m) => {
-        const list = m.fileArtifacts ?? (m.fileArtifacts = []);
-        list.push(artifact);
-      });
-      bumpThreadUpdated(threadId);
-      persistThreads();
-      if (
-        state.filesDrawer.open &&
-        state.filesDrawer.agent !== null &&
-        state.filesDrawer.agent === threadAgent(threadId)
-      ) {
-        void refreshFiles();
+      if (ev.name === "ui:file_artifact") {
+        const artifact = parseFileArtifact(ev.value);
+        if (!artifact) return;
+        mutateMessage(threadId, assistantMsgId, (m) => {
+          const list = m.fileArtifacts ?? (m.fileArtifacts = []);
+          list.push(artifact);
+        });
+        bumpThreadUpdated(threadId);
+        persistThreads();
+        if (
+          state.filesDrawer.open &&
+          state.filesDrawer.agent !== null &&
+          state.filesDrawer.agent === threadAgent(threadId)
+        ) {
+          void refreshFiles();
+        }
+      } else if (ev.name === "ui:approval_request") {
+        const approval = parseApprovalRequest(ev.value);
+        if (!approval) return;
+        mutateMessage(threadId, assistantMsgId, (m) => {
+          const list = m.approvalRequests ?? (m.approvalRequests = []);
+          list.push(approval);
+        });
+        bumpThreadUpdated(threadId);
+        persistThreads();
+      } else if (ev.name === "ui:approval_resolved") {
+        const resolved = parseApprovalResolved(ev.value);
+        if (!resolved) return;
+        markApprovalResolved(threadId, resolved.requestId, resolved.decision);
+        bumpThreadUpdated(threadId);
+        persistThreads();
       }
       return;
     case "RUN_FINISHED":
       setState("isStreaming", false);
       activeRunId = null;
+      activeRunIdByThread.delete(threadId);
       persistThreads();
       return;
     case "RUN_ERROR":
@@ -364,6 +410,7 @@ function handleEvent(
       });
       setState("errorBanner", ev.message);
       activeRunId = null;
+      activeRunIdByThread.delete(threadId);
       persistThreads();
       return;
     case "RUN_LAGGED":
@@ -377,6 +424,7 @@ function handleEvent(
       });
       setState("errorBanner", "Lost events on reconnect — message is incomplete.");
       activeRunId = null;
+      activeRunIdByThread.delete(threadId);
       persistThreads();
       return;
   }
@@ -389,6 +437,7 @@ function abortActiveStream(): void {
     setActiveStream(null);
   }
   activeRunId = null;
+  activeRunIdByThread.clear();
 }
 
 function currentThread(): Thread | undefined {
@@ -457,6 +506,50 @@ function bumpThreadUpdated(threadId: string): void {
   );
 }
 
+function parseApprovalRequest(value: unknown): ApprovalRequestCard | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.requestId !== "string" || obj.requestId.length === 0) return null;
+  if (typeof obj.toolName !== "string" || obj.toolName.length === 0) return null;
+  if (!obj.arguments || typeof obj.arguments !== "object") return null;
+  const pendingTotal =
+    typeof obj.pendingTotal === "number" && Number.isFinite(obj.pendingTotal) && obj.pendingTotal > 0
+      ? Math.floor(obj.pendingTotal)
+      : 1;
+  if (obj.shellCommand !== undefined && typeof obj.shellCommand !== "string") return null;
+  if (
+    obj.timeoutSecs !== undefined &&
+    (typeof obj.timeoutSecs !== "number" || !Number.isFinite(obj.timeoutSecs) || obj.timeoutSecs < 0)
+  ) {
+    return null;
+  }
+  return {
+    requestId: obj.requestId,
+    toolName: obj.toolName,
+    arguments: obj.arguments as Record<string, unknown>,
+    pendingTotal,
+    shellCommand: typeof obj.shellCommand === "string" ? obj.shellCommand : undefined,
+    timeoutSecs: typeof obj.timeoutSecs === "number" ? Math.floor(obj.timeoutSecs) : undefined,
+  };
+}
+
+function parseApprovalResolved(
+  value: unknown,
+): { requestId: string; decision: ApprovalDecision } | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.requestId !== "string" || obj.requestId.length === 0) return null;
+  if (
+    obj.decision !== "approve" &&
+    obj.decision !== "deny" &&
+    obj.decision !== "approve_all" &&
+    obj.decision !== "deny_all"
+  ) {
+    return null;
+  }
+  return { requestId: obj.requestId, decision: obj.decision as ApprovalDecision };
+}
+
 function parseFileArtifact(value: unknown): FileArtifact | null {
   if (!value || typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
@@ -475,6 +568,27 @@ function parseFileArtifact(value: unknown): FileArtifact | null {
     operation: obj.operation,
     deleted: false,
   };
+}
+
+function markApprovalResolved(
+  threadId: string,
+  requestId: string,
+  decision: ApprovalDecision,
+): void {
+  setState(
+    "threads",
+    (t) => t.id === threadId,
+    produce((t: Thread) => {
+      for (const message of t.messages) {
+        if (!message.approvalRequests) continue;
+        for (const approval of message.approvalRequests) {
+          if (approval.requestId === requestId) {
+            approval.resolvedDecision = decision;
+          }
+        }
+      }
+    }),
+  );
 }
 
 function markFileDeleted(agent: string, path: string): void {

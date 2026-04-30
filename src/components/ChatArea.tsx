@@ -110,7 +110,9 @@ export default function ChatArea() {
               }
             >
               <div class="mx-auto flex max-w-3xl flex-col gap-4">
-                <For each={t().messages}>{(m) => <MessageBubble message={m} agent={t().agent} />}</For>
+                <For each={t().messages}>
+                  {(m) => <MessageBubble threadId={t().id} message={m} agent={t().agent} />}
+                </For>
               </div>
             </Show>
           )}

@@ -26,7 +26,18 @@ export interface Message {
   // from "complete" without a separate flag on the thread.
   streaming?: boolean;
   errorMessage?: string;
+  approvalRequests?: ApprovalRequestCard[];
   fileArtifacts?: FileArtifact[];
+}
+
+export interface ApprovalRequestCard {
+  requestId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  pendingTotal: number;
+  shellCommand?: string;
+  timeoutSecs?: number;
+  resolvedDecision?: "approve" | "deny" | "approve_all" | "deny_all";
 }
 
 export interface FileArtifact {
