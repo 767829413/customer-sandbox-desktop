@@ -9,6 +9,7 @@ import {
   type ApprovalRequestCard,
   type FileArtifact,
   type Message,
+  type RuntimeThoughtCard,
   type Settings,
   type Thread,
   type ToolCallCard,
@@ -339,7 +340,7 @@ function onStreamError(
       setState("errorBanner", `Connection lost: ${err2.message}`);
       mutateMessage(threadId, assistantMsgId, (m) => {
         m.streaming = false;
-        m.runtimeThinking = false;
+        finalizeActiveThoughtsInMessage(m);
         m.errorMessage = err2.message;
       });
       activeRunId = null;
@@ -435,7 +436,7 @@ function handleEvent(
         const thinking = parseThinkingStatus(ev.value);
         if (!thinking) return;
         mutateMessage(threadId, assistantMsgId, (m) => {
-          m.runtimeThinking = thinking === "thinking";
+          applyThinkingStatus(m, thinking);
         });
         bumpThreadUpdated(threadId);
         persistThreads();
@@ -443,16 +444,7 @@ function handleEvent(
         const toolCall = parseToolCallStatus(ev.value);
         if (!toolCall) return;
         mutateMessage(threadId, assistantMsgId, (m) => {
-          const list = m.toolCalls ?? (m.toolCalls = []);
-          const existing = list.find((entry) => entry.toolCallId === toolCall.toolCallId);
-          if (!existing) {
-            list.push(toolCall);
-            return;
-          }
-          existing.toolName = toolCall.toolName;
-          existing.status = toolCall.status;
-          existing.elapsedMs = toolCall.elapsedMs;
-          existing.error = toolCall.error;
+          upsertToolCallTimeline(m, toolCall);
         });
         bumpThreadUpdated(threadId);
         persistThreads();
@@ -460,7 +452,7 @@ function handleEvent(
       return;
     case "RUN_FINISHED":
       setState("isStreaming", false);
-      clearRuntimeThinking(threadId);
+      finalizeActiveThoughtsForThread(threadId);
       activeRunId = null;
       activeRunIdByThread.delete(threadId);
       persistThreads();
@@ -469,7 +461,7 @@ function handleEvent(
       setState("isStreaming", false);
       mutateMessage(threadId, assistantMsgId, (m) => {
         m.streaming = false;
-        m.runtimeThinking = false;
+        finalizeActiveThoughtsInMessage(m);
         m.errorMessage = ev.message;
       });
       setState("errorBanner", ev.message);
@@ -484,7 +476,7 @@ function handleEvent(
       setState("isStreaming", false);
       mutateMessage(threadId, assistantMsgId, (m) => {
         m.streaming = false;
-        m.runtimeThinking = false;
+        finalizeActiveThoughtsInMessage(m);
         m.errorMessage = "Reconnect dropped events. Please resend.";
       });
       setState("errorBanner", "Lost events on reconnect — message is incomplete.");
@@ -571,18 +563,63 @@ function bumpThreadUpdated(threadId: string): void {
   );
 }
 
-function clearRuntimeThinking(threadId: string): void {
+function finalizeActiveThoughtsForThread(threadId: string): void {
   setState(
     "threads",
     (t) => t.id === threadId,
     produce((t: Thread) => {
       for (const message of t.messages) {
-        if (message.runtimeThinking) {
-          message.runtimeThinking = false;
-        }
+        finalizeActiveThoughtsInMessage(message);
       }
     }),
   );
+}
+
+function applyThinkingStatus(message: Message, event: ThinkingStatusEvent): void {
+  const timeline = message.runtimeTimeline ?? (message.runtimeTimeline = []);
+  const existing = timeline.find(
+    (item): item is RuntimeThoughtCard =>
+      item.kind === "thought" && item.thoughtId === event.thoughtId,
+  );
+
+  if (!existing) {
+    timeline.push({
+      kind: "thought",
+      thoughtId: event.thoughtId,
+      status: event.status === "thinking" ? "active" : "done",
+      durationMs: event.elapsedMs,
+    });
+    return;
+  }
+  existing.status = event.status === "thinking" ? "active" : "done";
+  existing.durationMs = event.elapsedMs;
+}
+
+function finalizeActiveThoughtsInMessage(message: Message): void {
+  const timeline = message.runtimeTimeline;
+  if (!timeline || timeline.length === 0) return;
+  for (const item of timeline) {
+    if (item.kind === "thought" && item.status === "active") {
+      item.status = "done";
+    }
+  }
+}
+
+function upsertToolCallTimeline(message: Message, incoming: ToolCallCard): void {
+  const timeline = message.runtimeTimeline ?? (message.runtimeTimeline = []);
+  const existing = timeline.find(
+    (item): item is ToolCallCard =>
+      item.kind === "tool_call" && item.toolCallId === incoming.toolCallId,
+  );
+  if (!existing) {
+    timeline.push(incoming);
+    return;
+  }
+
+  existing.toolName = incoming.toolName;
+  existing.status = incoming.status;
+  existing.elapsedMs = incoming.elapsedMs;
+  existing.error = incoming.error;
 }
 
 function parseApprovalRequest(value: unknown): ApprovalRequestCard | null {
@@ -649,11 +686,28 @@ function parseFileArtifact(value: unknown): FileArtifact | null {
   };
 }
 
-function parseThinkingStatus(value: unknown): "thinking" | "done" | null {
+type ThinkingStatusEvent = {
+  thoughtId: string;
+  status: "thinking" | "done";
+  elapsedMs?: number;
+};
+
+function parseThinkingStatus(value: unknown): ThinkingStatusEvent | null {
   if (!value || typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
+  if (typeof obj.thoughtId !== "string" || obj.thoughtId.length === 0) return null;
   if (obj.status !== "thinking" && obj.status !== "done") return null;
-  return obj.status;
+  if (
+    obj.elapsedMs !== undefined &&
+    (typeof obj.elapsedMs !== "number" || !Number.isFinite(obj.elapsedMs) || obj.elapsedMs < 0)
+  ) {
+    return null;
+  }
+  return {
+    thoughtId: obj.thoughtId,
+    status: obj.status,
+    elapsedMs: typeof obj.elapsedMs === "number" ? Math.floor(obj.elapsedMs) : undefined,
+  };
 }
 
 function parseToolCallStatus(value: unknown): ToolCallCard | null {
@@ -670,6 +724,7 @@ function parseToolCallStatus(value: unknown): ToolCallCard | null {
   }
   if (obj.error !== undefined && typeof obj.error !== "string") return null;
   return {
+    kind: "tool_call",
     toolCallId: obj.toolCallId,
     toolName: obj.toolName,
     status: obj.status,

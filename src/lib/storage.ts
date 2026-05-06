@@ -28,8 +28,7 @@ export interface Message {
   errorMessage?: string;
   approvalRequests?: ApprovalRequestCard[];
   fileArtifacts?: FileArtifact[];
-  runtimeThinking?: boolean;
-  toolCalls?: ToolCallCard[];
+  runtimeTimeline?: RuntimeTimelineItem[];
 }
 
 export interface ApprovalRequestCard {
@@ -51,13 +50,23 @@ export interface FileArtifact {
   deleted?: boolean;
 }
 
+export interface RuntimeThoughtCard {
+  kind: "thought";
+  thoughtId: string;
+  status: "active" | "done";
+  durationMs?: number;
+}
+
 export interface ToolCallCard {
+  kind: "tool_call";
   toolCallId: string;
   toolName: string;
   status: "started" | "done" | "failed";
   elapsedMs?: number;
   error?: string;
 }
+
+export type RuntimeTimelineItem = RuntimeThoughtCard | ToolCallCard;
 
 export interface Thread {
   id: string;
