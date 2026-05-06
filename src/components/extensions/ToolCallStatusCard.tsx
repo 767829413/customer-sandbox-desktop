@@ -54,15 +54,35 @@ export default function ToolCallStatusCard(props: Props) {
           {props.card.error}
         </div>
       </Show>
-      <Show when={props.card.resultPreview && props.card.resultPreview.trim().length > 0}>
-        {(preview) => (
-          <details class="ml-5 mt-1 rounded border border-neutral-300 bg-white/70 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/70">
-            <summary class="cursor-pointer text-neutral-600 dark:text-neutral-300">执行结果</summary>
-            <pre class="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-neutral-700 dark:text-neutral-200">
-              {preview()}
+      <Show
+        when={
+          (props.card.arguments && props.card.arguments.trim().length > 0) ||
+          (props.card.result && props.card.result.trim().length > 0) ||
+          (props.card.resultPreview && props.card.resultPreview.trim().length > 0)
+        }
+      >
+        <details class="ml-5 mt-1 rounded border border-neutral-300 bg-white/70 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/70">
+          <summary class="cursor-pointer text-neutral-600 dark:text-neutral-300">请求 / 响应</summary>
+          <Show when={props.card.arguments && props.card.arguments.trim().length > 0}>
+            <div class="mt-1 text-[11px] font-medium text-neutral-600 dark:text-neutral-300">Request</div>
+            <pre class="mt-1 max-h-56 overflow-auto whitespace-pre-wrap text-[11px] text-neutral-700 dark:text-neutral-200">
+              {props.card.arguments}
             </pre>
-          </details>
-        )}
+          </Show>
+          <Show
+            when={
+              (props.card.result && props.card.result.trim().length > 0) ||
+              (props.card.resultPreview && props.card.resultPreview.trim().length > 0)
+            }
+          >
+            <div class="mt-2 text-[11px] font-medium text-neutral-600 dark:text-neutral-300">Response</div>
+            <pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap text-[11px] text-neutral-700 dark:text-neutral-200">
+              {props.card.result && props.card.result.trim().length > 0
+                ? props.card.result
+                : props.card.resultPreview}
+            </pre>
+          </Show>
+        </details>
       </Show>
     </div>
   );

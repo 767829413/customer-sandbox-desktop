@@ -56,6 +56,7 @@ export interface RuntimeThoughtCard {
   thoughtId: string;
   status: "active" | "done";
   durationMs?: number;
+  detail?: string;
 }
 
 export interface ToolCallCard {
@@ -64,6 +65,8 @@ export interface ToolCallCard {
   toolName: string;
   status: "started" | "done" | "failed";
   elapsedMs?: number;
+  arguments?: string;
+  result?: string;
   error?: string;
   resultPreview?: string;
 }

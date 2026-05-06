@@ -38,6 +38,7 @@ export default function MessageBubble(props: Props) {
     }
     return map;
   });
+  const timelineCount = createMemo(() => props.message.timeline?.length ?? 0);
 
   return (
     <div
@@ -52,7 +53,7 @@ export default function MessageBubble(props: Props) {
         }}
       >
         <Show
-          when={(props.message.timeline?.length ?? 0) > 0}
+          when={timelineCount() > 0}
           fallback={
             <>
               <Show when={(props.message.approvalRequests?.length ?? 0) > 0}>
@@ -72,30 +73,38 @@ export default function MessageBubble(props: Props) {
             </>
           }
         >
-          <div class="mb-2 rounded-md border border-neutral-300 bg-neutral-50/80 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/70">
-            <For each={props.message.timeline}>
-              {(item) =>
-                item.kind === "thought" ? (
-                  <RuntimeThoughtCard card={item} />
-                ) : item.kind === "tool_call" ? (
-                  <ToolCallStatusCard card={item} />
-                ) : item.kind === "custom_event" ? (
-                  <div class="py-1 text-[11px] text-neutral-700 dark:text-neutral-300">
-                    <span class="font-mono">{item.name}</span>
-                    <span class="ml-2 text-neutral-500 dark:text-neutral-400">{item.preview}</span>
-                  </div>
-                ) : item.kind === "approval" ? (
-                  <Show when={approvalsById().get(item.requestId)}>
-                    {(approval) => <ApprovalCard threadId={props.threadId} approval={approval()} />}
-                  </Show>
-                ) : (
-                  <Show when={artifactsById().get(item.eventId)}>
-                    {(artifact) => <FileArtifactChip artifact={artifact()} agent={props.agent} />}
-                  </Show>
-                )
-              }
-            </For>
-          </div>
+          <details
+            class="mb-2 rounded-md border border-neutral-300 bg-neutral-50/80 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/70"
+            open={props.message.streaming === true}
+          >
+            <summary class="cursor-pointer text-[11px] text-neutral-600 dark:text-neutral-300">
+              Runtime timeline · {timelineCount()} events
+            </summary>
+            <div class="mt-1">
+              <For each={props.message.timeline}>
+                {(item) =>
+                  item.kind === "thought" ? (
+                    <RuntimeThoughtCard card={item} />
+                  ) : item.kind === "tool_call" ? (
+                    <ToolCallStatusCard card={item} />
+                  ) : item.kind === "custom_event" ? (
+                    <div class="py-1 text-[11px] text-neutral-700 dark:text-neutral-300">
+                      <span class="font-mono">{item.name}</span>
+                      <span class="ml-2 text-neutral-500 dark:text-neutral-400">{item.preview}</span>
+                    </div>
+                  ) : item.kind === "approval" ? (
+                    <Show when={approvalsById().get(item.requestId)}>
+                      {(approval) => <ApprovalCard threadId={props.threadId} approval={approval()} />}
+                    </Show>
+                  ) : (
+                    <Show when={artifactsById().get(item.eventId)}>
+                      {(artifact) => <FileArtifactChip artifact={artifact()} agent={props.agent} />}
+                    </Show>
+                  )
+                }
+              </For>
+            </div>
+          </details>
         </Show>
         <Show
           when={props.message.content.length > 0}

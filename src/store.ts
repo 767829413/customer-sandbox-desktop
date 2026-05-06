@@ -2,12 +2,24 @@ import { batch, createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { newId } from "./lib/id";
 import {
+  UserFacingMessages,
+  type CapabilityStatus,
+  isUnsupportedEndpointError,
+} from "./lib/capability";
+import { AgUiCustomEventNames } from "./lib/agui-custom-events";
+import {
+  parseApprovalRequest,
+  parseApprovalResolved,
+  parseFileArtifact,
+  parseThinkingStatus,
+  parseToolCallStatus,
+  type ThinkingStatusEvent,
+} from "./lib/parsers";
+import {
   loadSettings,
   loadThreadsBundle,
   saveSettings,
   saveThreadsBundle,
-  type ApprovalRequestCard,
-  type FileArtifact,
   type GenericCustomTimelineItem,
   type Message,
   type RuntimeThoughtCard,
@@ -58,8 +70,6 @@ interface AppState {
     truncated: boolean;
   };
 }
-
-type CapabilityStatus = "unknown" | "supported" | "unsupported";
 
 const initialSettings = loadSettings();
 const initialBundle = loadThreadsBundle();
@@ -160,9 +170,27 @@ function markCapability(kind: keyof AppState["capabilities"], status: Capability
   setState("capabilities", kind, status);
 }
 
-function isUnsupportedEndpointError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return /HTTP\s+(404|405|501)\b/i.test(msg);
+async function withCapability<T>(
+  kind: keyof AppState["capabilities"],
+  unsupportedMessage: string,
+  op: () => Promise<T>,
+  onUnsupported?: () => void,
+): Promise<T> {
+  if (state.capabilities[kind] === "unsupported") {
+    throw new Error(unsupportedMessage);
+  }
+  try {
+    const result = await op();
+    markCapability(kind, "supported");
+    return result;
+  } catch (err) {
+    if (isUnsupportedEndpointError(err)) {
+      markCapability(kind, "unsupported");
+      onUnsupported?.();
+      throw new Error(unsupportedMessage);
+    }
+    throw err;
+  }
 }
 
 function normalizeAgents(agents: string[], fallback: string): string[] {
@@ -207,7 +235,7 @@ export function toggleFilesDrawer(agent: string): void {
 
 export function openFilesDrawer(agent: string): void {
   if (state.capabilities.filesApi === "unsupported") {
-    setState("errorBanner", "当前服务端未实现文件扩展能力，已禁用 Files。");
+    setState("errorBanner", UserFacingMessages.filesDisabled);
     return;
   }
   setState(
@@ -263,7 +291,7 @@ export async function refreshFiles(): Promise<void> {
           s.filesDrawer.errorMessage = null;
         }),
       );
-      setState("errorBanner", "当前服务端未实现文件扩展能力，Files 已自动隐藏。");
+      setState("errorBanner", UserFacingMessages.filesAutoHidden);
       return;
     }
     const rawMessage = err instanceof Error ? err.message : String(err);
@@ -279,20 +307,12 @@ export async function refreshFiles(): Promise<void> {
 }
 
 export async function deleteWorkspaceFile(agent: string, path: string): Promise<void> {
-  if (state.capabilities.filesApi === "unsupported") {
-    throw new Error("当前服务端未实现文件扩展能力。");
-  }
-  try {
-    await deleteFile(state.settings, agent, path);
-    markCapability("filesApi", "supported");
-  } catch (err) {
-    if (isUnsupportedEndpointError(err)) {
-      markCapability("filesApi", "unsupported");
-      setState("errorBanner", "当前服务端未实现文件扩展能力，Files 已自动隐藏。");
-      throw new Error("当前服务端未实现文件扩展能力。");
-    }
-    throw err;
-  }
+  await withCapability(
+    "filesApi",
+    UserFacingMessages.filesUnsupported,
+    () => deleteFile(state.settings, agent, path),
+    () => setState("errorBanner", UserFacingMessages.filesAutoHidden),
+  );
   markFileDeleted(agent, path);
   setState(
     produce((s: AppState) => {
@@ -304,21 +324,12 @@ export async function deleteWorkspaceFile(agent: string, path: string): Promise<
 }
 
 export async function downloadWorkspaceFile(agent: string, path: string): Promise<Blob> {
-  if (state.capabilities.filesApi === "unsupported") {
-    throw new Error("当前服务端未实现文件扩展能力。");
-  }
-  try {
-    const blob = await downloadFile(state.settings, agent, path);
-    markCapability("filesApi", "supported");
-    return blob;
-  } catch (err) {
-    if (isUnsupportedEndpointError(err)) {
-      markCapability("filesApi", "unsupported");
-      setState("errorBanner", "当前服务端未实现文件扩展能力，Files 已自动隐藏。");
-      throw new Error("当前服务端未实现文件扩展能力。");
-    }
-    throw err;
-  }
+  return withCapability(
+    "filesApi",
+    UserFacingMessages.filesUnsupported,
+    () => downloadFile(state.settings, agent, path),
+    () => setState("errorBanner", UserFacingMessages.filesAutoHidden),
+  );
 }
 
 export async function respondApproval(
@@ -326,27 +337,17 @@ export async function respondApproval(
   requestId: string,
   decision: ApprovalDecision,
 ): Promise<void> {
-  if (state.capabilities.approvalApi === "unsupported") {
-    throw new Error("当前服务端未实现审批回填接口，无法在卡片中直接审批。");
-  }
   const runId = activeRunIdByThread.get(threadId);
   if (!runId) {
     throw new Error("No active run for this thread.");
   }
-  try {
-    await postApprovalResponse(state.settings, threadId, {
+  await withCapability("approvalApi", UserFacingMessages.approvalUnsupported, () =>
+    postApprovalResponse(state.settings, threadId, {
       runId,
       requestId,
       decision,
-    });
-    markCapability("approvalApi", "supported");
-  } catch (err) {
-    if (isUnsupportedEndpointError(err)) {
-      markCapability("approvalApi", "unsupported");
-      throw new Error("当前服务端未实现审批回填接口，无法在卡片中直接审批。");
-    }
-    throw err;
-  }
+    }),
+  );
 }
 
 /**
@@ -432,7 +433,7 @@ function onStreamError(
     onError: (err2) => {
       if (activeRunId !== runId) return;
       setState("isStreaming", false);
-      setState("errorBanner", `Connection lost: ${err2.message}`);
+      setState("errorBanner", `${UserFacingMessages.connectionLostPrefix}${err2.message}`);
       mutateMessage(threadId, assistantMsgId, (m) => {
         m.streaming = false;
         finalizeActiveThoughtsInMessage(m);
@@ -531,9 +532,9 @@ function handleEvent(
       mutateMessage(threadId, assistantMsgId, (m) => {
         m.streaming = false;
         finalizeActiveThoughtsInMessage(m);
-        m.errorMessage = "Reconnect dropped events. Please resend.";
+        m.errorMessage = UserFacingMessages.reconnectDroppedEvents;
       });
-      setState("errorBanner", "Lost events on reconnect — message is incomplete.");
+      setState("errorBanner", UserFacingMessages.lostEventsOnReconnect);
       activeRunId = null;
       activeRunIdByThread.delete(threadId);
       persistThreads();
@@ -547,7 +548,7 @@ function handleKnownCustomEvent(
   name: string,
   value: unknown,
 ): boolean {
-  if (name === "ui:file_artifact") {
+  if (name === AgUiCustomEventNames.fileArtifact) {
     const artifact = parseFileArtifact(value);
     if (!artifact) return false;
     mutateMessage(threadId, assistantMsgId, (m) => {
@@ -567,7 +568,7 @@ function handleKnownCustomEvent(
     }
     return true;
   }
-  if (name === "ui:approval_request") {
+  if (name === AgUiCustomEventNames.approvalRequest) {
     const approval = parseApprovalRequest(value);
     if (!approval) return false;
     mutateMessage(threadId, assistantMsgId, (m) => {
@@ -584,7 +585,7 @@ function handleKnownCustomEvent(
     persistThreads();
     return true;
   }
-  if (name === "ui:approval_resolved") {
+  if (name === AgUiCustomEventNames.approvalResolved) {
     const resolved = parseApprovalResolved(value);
     if (!resolved) return false;
     markApprovalResolved(threadId, resolved.requestId, resolved.decision);
@@ -592,7 +593,7 @@ function handleKnownCustomEvent(
     persistThreads();
     return true;
   }
-  if (name === "ui:thinking_status") {
+  if (name === AgUiCustomEventNames.thinkingStatus) {
     const thinking = parseThinkingStatus(value);
     if (!thinking) return false;
     mutateMessage(threadId, assistantMsgId, (m) => {
@@ -602,7 +603,7 @@ function handleKnownCustomEvent(
     persistThreads();
     return true;
   }
-  if (name === "ui:tool_call") {
+  if (name === AgUiCustomEventNames.toolCall) {
     const toolCall = parseToolCallStatus(value);
     if (!toolCall) return false;
     mutateMessage(threadId, assistantMsgId, (m) => {
@@ -716,11 +717,13 @@ function applyThinkingStatus(message: Message, event: ThinkingStatusEvent): void
       thoughtId: event.thoughtId,
       status: event.status === "thinking" ? "active" : "done",
       durationMs: event.elapsedMs,
+      detail: event.detail,
     });
     return;
   }
   existing.status = event.status === "thinking" ? "active" : "done";
   existing.durationMs = event.elapsedMs;
+  existing.detail = event.detail;
 }
 
 function finalizeActiveThoughtsInMessage(message: Message): void {
@@ -747,6 +750,8 @@ function upsertToolCallTimeline(message: Message, incoming: ToolCallCard): void 
   existing.toolName = incoming.toolName;
   existing.status = incoming.status;
   existing.elapsedMs = incoming.elapsedMs;
+  existing.arguments = incoming.arguments;
+  existing.result = incoming.result;
   existing.error = incoming.error;
   existing.resultPreview = incoming.resultPreview;
 }
@@ -781,123 +786,6 @@ function summarizeCustomPayload(value: unknown): string {
 function truncateForTimeline(input: string, maxLen = 280): string {
   if (input.length <= maxLen) return input;
   return `${input.slice(0, maxLen)}…`;
-}
-
-function parseApprovalRequest(value: unknown): ApprovalRequestCard | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.requestId !== "string" || obj.requestId.length === 0) return null;
-  if (typeof obj.toolName !== "string" || obj.toolName.length === 0) return null;
-  if (!obj.arguments || typeof obj.arguments !== "object") return null;
-  const pendingTotal =
-    typeof obj.pendingTotal === "number" && Number.isFinite(obj.pendingTotal) && obj.pendingTotal > 0
-      ? Math.floor(obj.pendingTotal)
-      : 1;
-  if (obj.shellCommand !== undefined && typeof obj.shellCommand !== "string") return null;
-  if (
-    obj.timeoutSecs !== undefined &&
-    (typeof obj.timeoutSecs !== "number" || !Number.isFinite(obj.timeoutSecs) || obj.timeoutSecs < 0)
-  ) {
-    return null;
-  }
-  return {
-    requestId: obj.requestId,
-    toolName: obj.toolName,
-    arguments: obj.arguments as Record<string, unknown>,
-    pendingTotal,
-    shellCommand: typeof obj.shellCommand === "string" ? obj.shellCommand : undefined,
-    timeoutSecs: typeof obj.timeoutSecs === "number" ? Math.floor(obj.timeoutSecs) : undefined,
-  };
-}
-
-function parseApprovalResolved(
-  value: unknown,
-): { requestId: string; decision: ApprovalDecision } | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.requestId !== "string" || obj.requestId.length === 0) return null;
-  if (
-    obj.decision !== "approve" &&
-    obj.decision !== "deny" &&
-    obj.decision !== "approve_all" &&
-    obj.decision !== "deny_all"
-  ) {
-    return null;
-  }
-  return { requestId: obj.requestId, decision: obj.decision as ApprovalDecision };
-}
-
-function parseFileArtifact(value: unknown): FileArtifact | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.path !== "string" || obj.path.length === 0) return null;
-  if (typeof obj.name !== "string" || obj.name.length === 0) return null;
-  if (typeof obj.sizeBytes !== "number" || !Number.isFinite(obj.sizeBytes) || obj.sizeBytes < 0) {
-    return null;
-  }
-  if (obj.mime !== undefined && typeof obj.mime !== "string") return null;
-  if (obj.operation !== "created" && obj.operation !== "modified") return null;
-  return {
-    eventId:
-      typeof obj.eventId === "string" && obj.eventId.length > 0
-        ? obj.eventId
-        : `file_${newId()}`,
-    path: obj.path,
-    name: obj.name,
-    sizeBytes: Math.floor(obj.sizeBytes),
-    mime: typeof obj.mime === "string" ? obj.mime : undefined,
-    operation: obj.operation,
-    deleted: false,
-  };
-}
-
-type ThinkingStatusEvent = {
-  thoughtId: string;
-  status: "thinking" | "done";
-  elapsedMs?: number;
-};
-
-function parseThinkingStatus(value: unknown): ThinkingStatusEvent | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.thoughtId !== "string" || obj.thoughtId.length === 0) return null;
-  if (obj.status !== "thinking" && obj.status !== "done") return null;
-  if (
-    obj.elapsedMs !== undefined &&
-    (typeof obj.elapsedMs !== "number" || !Number.isFinite(obj.elapsedMs) || obj.elapsedMs < 0)
-  ) {
-    return null;
-  }
-  return {
-    thoughtId: obj.thoughtId,
-    status: obj.status,
-    elapsedMs: typeof obj.elapsedMs === "number" ? Math.floor(obj.elapsedMs) : undefined,
-  };
-}
-
-function parseToolCallStatus(value: unknown): ToolCallCard | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.toolCallId !== "string" || obj.toolCallId.length === 0) return null;
-  if (typeof obj.toolName !== "string" || obj.toolName.length === 0) return null;
-  if (obj.status !== "started" && obj.status !== "done" && obj.status !== "failed") return null;
-  if (
-    obj.elapsedMs !== undefined &&
-    (typeof obj.elapsedMs !== "number" || !Number.isFinite(obj.elapsedMs) || obj.elapsedMs < 0)
-  ) {
-    return null;
-  }
-  if (obj.error !== undefined && typeof obj.error !== "string") return null;
-  if (obj.resultPreview !== undefined && typeof obj.resultPreview !== "string") return null;
-  return {
-    kind: "tool_call",
-    toolCallId: obj.toolCallId,
-    toolName: obj.toolName,
-    status: obj.status,
-    elapsedMs: typeof obj.elapsedMs === "number" ? Math.floor(obj.elapsedMs) : undefined,
-    error: typeof obj.error === "string" ? obj.error : undefined,
-    resultPreview: typeof obj.resultPreview === "string" ? obj.resultPreview : undefined,
-  };
 }
 
 function markApprovalResolved(

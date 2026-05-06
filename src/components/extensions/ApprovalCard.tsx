@@ -1,5 +1,6 @@
 import { Show, createMemo, createSignal } from "solid-js";
 import type { ApprovalDecision } from "../../lib/api";
+import { UserFacingMessages } from "../../lib/capability";
 import type { ApprovalRequestCard } from "../../lib/storage";
 import { respondApproval, store } from "../../store";
 
@@ -20,6 +21,17 @@ export default function ApprovalCard(props: Props) {
       return "{}";
     }
   });
+  const requestPreview = createMemo(() => {
+    const trimmedCmd = props.approval.shellCommand?.trim();
+    const source =
+      trimmedCmd && trimmedCmd.length > 0
+        ? trimmedCmd
+        : prettyArgs()
+            .replace(/\s+/g, " ")
+            .trim();
+    if (!source) return "(empty)";
+    return source.length > 140 ? `${source.slice(0, 140)}…` : source;
+  });
 
   const resolvedDecision = createMemo(
     () => props.approval.resolvedDecision ?? submittedDecision() ?? null,
@@ -30,7 +42,7 @@ export default function ApprovalCard(props: Props) {
 
   const onDecision = async (decision: ApprovalDecision) => {
     if (approvalApiUnsupported()) {
-      setError("当前服务端未实现审批回填接口，无法在卡片中直接审批。");
+      setError(UserFacingMessages.approvalUnsupported);
       return;
     }
     if (busyDecision() !== null || resolvedDecision() !== null) return;
@@ -59,14 +71,25 @@ export default function ApprovalCard(props: Props) {
         </Show>
       </div>
 
-      <Show
-        when={props.approval.shellCommand}
-        fallback={<pre class="max-h-40 overflow-auto rounded bg-black/5 p-2 dark:bg-black/30">{prettyArgs()}</pre>}
-      >
-        {(cmd) => (
-          <pre class="max-h-40 overflow-auto rounded bg-black/5 p-2 dark:bg-black/30">{cmd()}</pre>
-        )}
-      </Show>
+      <details class="rounded border border-amber-200 bg-white/60 px-2 py-1 dark:border-amber-800/60 dark:bg-black/20">
+        <summary class="cursor-pointer text-[11px] text-amber-800 dark:text-amber-200">
+          Request · {requestPreview()}
+        </summary>
+        <Show
+          when={props.approval.shellCommand}
+          fallback={
+            <pre class="mt-1 max-h-40 overflow-auto rounded bg-black/5 p-2 dark:bg-black/30">
+              {prettyArgs()}
+            </pre>
+          }
+        >
+          {(cmd) => (
+            <pre class="mt-1 max-h-40 overflow-auto rounded bg-black/5 p-2 dark:bg-black/30">
+              {cmd()}
+            </pre>
+          )}
+        </Show>
+      </details>
 
       <div class="mt-2 flex flex-wrap gap-1.5">
         <button
@@ -101,7 +124,7 @@ export default function ApprovalCard(props: Props) {
 
       <Show when={approvalApiUnsupported()}>
         <div class="mt-2 rounded bg-neutral-100 px-2 py-1 text-[11px] text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
-          当前服务端未实现审批回填接口（/v1/threads/&lt;threadId&gt;/responses）。
+          {UserFacingMessages.approvalUnsupported}
         </div>
       </Show>
 
