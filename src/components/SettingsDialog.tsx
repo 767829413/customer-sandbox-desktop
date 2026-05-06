@@ -35,7 +35,7 @@ export default function SettingsDialog(props: Props) {
     const selected = defaultAgent().trim();
     const nextAgent = options.includes(selected)
       ? selected
-      : options[0] ?? store.settings.defaultAgent ?? "zeptoclaw";
+      : selected || options[0] || store.settings.defaultAgent || "default";
     updateSettings({
       gatewayUrl: trimmedGateway,
       bearerToken: trimmedToken,
@@ -51,8 +51,7 @@ export default function SettingsDialog(props: Props) {
   const loadAgents = async (settings: Settings) => {
     const seq = ++loadSeq;
     const url = settings.gatewayUrl.trim();
-    const token = settings.bearerToken.trim();
-    if (!url || !token) {
+    if (!url) {
       setAgentsLoading(false);
       setAgentsError(null);
       setAvailableAgents(store.availableAgents.length > 0 ? store.availableAgents : []);
@@ -77,7 +76,7 @@ export default function SettingsDialog(props: Props) {
       setAvailableAgents([]);
       setAgentsError(
         raw.includes("HTTP 404")
-          ? "Gateway 当前版本不支持 /v1/agents，请升级 gateway。"
+          ? "服务端未提供 /v1/agents，将使用手动输入的 Default agent。"
           : `拉取 agent 失败：${raw}`,
       );
     } finally {
@@ -137,8 +136,7 @@ export default function SettingsDialog(props: Props) {
             <div class="relative">
               <input
                 type={showToken() ? "text" : "password"}
-                required
-                placeholder="osh_pat_…"
+                placeholder="optional"
                 value={bearerToken()}
                 onInput={(e) => setBearerToken(e.currentTarget.value)}
                 class="w-full rounded border border-neutral-300 bg-white px-2 py-1.5 pr-16 text-sm font-mono dark:border-neutral-700 dark:bg-neutral-800"
@@ -152,25 +150,25 @@ export default function SettingsDialog(props: Props) {
               </button>
             </div>
             <span class="mt-1 block text-xs text-neutral-500">
-              Configured under <code>[[agui.auth.tokens]]</code> in
-              <code> gateway.toml</code>.
+              可选。仅当服务端要求 Bearer 鉴权时填写。
             </span>
           </label>
 
           <label class="block pb-4">
             <span class="block pb-1 text-sm font-medium">Default agent</span>
-            <select
+            <input
+              type="text"
+              list="agent-options"
               value={defaultAgent()}
-              onChange={(e) => setDefaultAgent(e.currentTarget.value)}
-              disabled={agentsLoading() || availableAgents().length === 0}
+              onInput={(e) => setDefaultAgent(e.currentTarget.value)}
+              placeholder="default"
               class="w-full rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm font-mono dark:border-neutral-700 dark:bg-neutral-800"
-            >
-              <Show when={availableAgents().length > 0} fallback={<option value="">(no agents)</option>}>
-                <For each={availableAgents()}>{(agent) => <option value={agent}>{agent}</option>}</For>
-              </Show>
-            </select>
+            />
+            <datalist id="agent-options">
+              <For each={availableAgents()}>{(agent) => <option value={agent} />}</For>
+            </datalist>
             <span class="mt-1 block text-xs text-neutral-500">
-              填好 Gateway URL 和 Bearer token 后会自动拉取 agent 列表，再从下拉里选择。
+              客户端会尝试自动拉取 agent 列表；失败时可手动填写，保持兼容不同 AG-UI 服务端。
             </span>
             <Show when={agentsLoading()}>
               <span class="mt-1 block text-xs text-neutral-500">Loading agents...</span>

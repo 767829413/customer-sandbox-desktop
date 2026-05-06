@@ -43,7 +43,7 @@ export interface StreamCallbacks {
 }
 
 export interface StreamHandle {
-  /** Abort the underlying fetch. The producer keeps running on the gateway. */
+  /** Abort the underlying fetch. The producer keeps running on the server. */
   abort: () => void;
 }
 
@@ -77,7 +77,7 @@ function authRequestHeaders(settings: Settings, accept: string): HeadersInit {
 /**
  * Start a new run by POSTing to /v1/runs and consuming the SSE response.
  *
- * The gateway architecture (B5) decouples producer from consumer: the
+ * The server stream hub decouples producer from consumer: the
  * actual run executes in a detached task on the server, and POST is just
  * a subscriber. So losing this fetch (e.g. ssh tunnel hiccup) doesn't
  * truncate the run — call `resumeRun` with the same runId + last seq to
@@ -151,11 +151,11 @@ async function runFetch(
   }
 
   if (!resp.ok) {
-    cb.onError(new Error(`gateway returned HTTP ${resp.status}`));
+    cb.onError(new Error(`server returned HTTP ${resp.status}`));
     return;
   }
   if (!resp.body) {
-    cb.onError(new Error("gateway response has no body"));
+    cb.onError(new Error("server response has no body"));
     return;
   }
 
@@ -177,7 +177,7 @@ async function runFetch(
 }
 
 function decodeFrame(frame: SseFrame): AgUiEvent | null {
-  // Defensive: the gateway always emits JSON in the data field, but a
+  // Defensive: the AG-UI server should emit JSON in the data field, but a
   // future stray comment / keep-alive shouldn't crash the parser.
   if (!frame.data) return null;
   try {
@@ -203,7 +203,7 @@ function fileApiUrl(settings: Settings, endpoint: string, agent: string, path?: 
 }
 
 async function responseError(resp: Response): Promise<Error> {
-  const fallback = `gateway returned HTTP ${resp.status}`;
+  const fallback = `server returned HTTP ${resp.status}`;
   const contentType = resp.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     try {
@@ -257,7 +257,7 @@ export async function listAgents(settings: Settings): Promise<AgentCatalog> {
     agents: Array.isArray(body.agents)
       ? body.agents.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
       : [],
-    defaultAgent: typeof body.defaultAgent === "string" ? body.defaultAgent : "zeptoclaw",
+    defaultAgent: typeof body.defaultAgent === "string" ? body.defaultAgent : "default",
   };
 }
 

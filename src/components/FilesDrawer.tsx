@@ -1,7 +1,7 @@
 import { For, Show, createSignal } from "solid-js";
-import { downloadFile } from "../lib/api";
 import {
   closeFilesDrawer,
+  downloadWorkspaceFile,
   deleteWorkspaceFile,
   refreshFiles,
   store,
@@ -11,8 +11,12 @@ const LARGE_FILE_BYTES = 50 * 1024 * 1024;
 
 export default function FilesDrawer() {
   const [busyPath, setBusyPath] = createSignal<string | null>(null);
+  const [localError, setLocalError] = createSignal<string | null>(null);
 
-  const onRefresh = () => void refreshFiles();
+  const onRefresh = () => {
+    setLocalError(null);
+    void refreshFiles();
+  };
 
   const onDownload = async (path: string, name: string, sizeBytes: number) => {
     if (!store.filesDrawer.agent || busyPath() !== null) return;
@@ -23,8 +27,9 @@ export default function FilesDrawer() {
       return;
     }
     setBusyPath(path);
+    setLocalError(null);
     try {
-      const blob = await downloadFile(store.settings, store.filesDrawer.agent, path);
+      const blob = await downloadWorkspaceFile(store.filesDrawer.agent, path);
       const url = URL.createObjectURL(blob);
       try {
         const link = document.createElement("a");
@@ -37,6 +42,8 @@ export default function FilesDrawer() {
       } finally {
         URL.revokeObjectURL(url);
       }
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusyPath(null);
     }
@@ -52,9 +59,12 @@ export default function FilesDrawer() {
       return;
     }
     setBusyPath(path);
+    setLocalError(null);
     try {
       await deleteWorkspaceFile(store.filesDrawer.agent, path);
       await refreshFiles();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusyPath(null);
     }
@@ -99,6 +109,13 @@ export default function FilesDrawer() {
 
         <div class="flex-1 overflow-y-auto px-3 py-2">
           <Show when={store.filesDrawer.errorMessage}>
+            {(msg) => (
+              <div class="mb-2 rounded bg-red-100 px-2 py-1 text-xs text-red-700 dark:bg-red-900/40 dark:text-red-200">
+                {msg()}
+              </div>
+            )}
+          </Show>
+          <Show when={localError()}>
             {(msg) => (
               <div class="mb-2 rounded bg-red-100 px-2 py-1 text-xs text-red-700 dark:bg-red-900/40 dark:text-red-200">
                 {msg()}

@@ -26,9 +26,9 @@ export interface Message {
   // from "complete" without a separate flag on the thread.
   streaming?: boolean;
   errorMessage?: string;
+  timeline?: MessageTimelineItem[];
   approvalRequests?: ApprovalRequestCard[];
   fileArtifacts?: FileArtifact[];
-  runtimeTimeline?: RuntimeTimelineItem[];
 }
 
 export interface ApprovalRequestCard {
@@ -42,6 +42,7 @@ export interface ApprovalRequestCard {
 }
 
 export interface FileArtifact {
+  eventId: string;
   path: string;
   name: string;
   sizeBytes: number;
@@ -64,9 +65,32 @@ export interface ToolCallCard {
   status: "started" | "done" | "failed";
   elapsedMs?: number;
   error?: string;
+  resultPreview?: string;
 }
 
 export type RuntimeTimelineItem = RuntimeThoughtCard | ToolCallCard;
+
+export interface ApprovalTimelineItem {
+  kind: "approval";
+  requestId: string;
+}
+
+export interface FileArtifactTimelineItem {
+  kind: "file_artifact";
+  eventId: string;
+}
+
+export interface GenericCustomTimelineItem {
+  kind: "custom_event";
+  name: string;
+  preview: string;
+}
+
+export type MessageTimelineItem =
+  | RuntimeTimelineItem
+  | ApprovalTimelineItem
+  | FileArtifactTimelineItem
+  | GenericCustomTimelineItem;
 
 export interface Thread {
   id: string;
@@ -85,7 +109,7 @@ export interface ThreadsBundle {
 const DEFAULT_SETTINGS: Settings = {
   gatewayUrl: "http://127.0.0.1:7878",
   bearerToken: "",
-  defaultAgent: "zeptoclaw",
+  defaultAgent: "default",
 };
 
 export function loadSettings(): Settings {

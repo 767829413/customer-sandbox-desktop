@@ -1,6 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import { renderMarkdown } from "../lib/markdown";
-import type { Message } from "../lib/storage";
+import type { ApprovalRequestCard, FileArtifact, Message } from "../lib/storage";
 import ApprovalCard from "./extensions/ApprovalCard";
 import FileArtifactChip from "./extensions/FileArtifactChip";
 import RuntimeThoughtCard from "./extensions/RuntimeThoughtCard";
@@ -15,6 +15,29 @@ interface Props {
 export default function MessageBubble(props: Props) {
   const html = createMemo(() => renderMarkdown(props.message.content));
   const isUser = () => props.message.role === "user";
+  const timeLabel = createMemo(() =>
+    new Date(props.message.createdAtMs).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }),
+  );
+  const approvalsById = createMemo(() => {
+    const map = new Map<string, ApprovalRequestCard>();
+    for (const approval of props.message.approvalRequests ?? []) {
+      if (!approval) continue;
+      map.set(approval.requestId, approval);
+    }
+    return map;
+  });
+  const artifactsById = createMemo(() => {
+    const map = new Map<string, FileArtifact>();
+    for (const artifact of props.message.fileArtifacts ?? []) {
+      if (!artifact) continue;
+      map.set(artifact.eventId, artifact);
+    }
+    return map;
+  });
 
   return (
     <div
@@ -28,6 +51,52 @@ export default function MessageBubble(props: Props) {
           "bg-neutral-100 dark:bg-neutral-800": !isUser(),
         }}
       >
+        <Show
+          when={(props.message.timeline?.length ?? 0) > 0}
+          fallback={
+            <>
+              <Show when={(props.message.approvalRequests?.length ?? 0) > 0}>
+                <div class="mb-2 flex flex-col gap-1.5">
+                  <For each={props.message.approvalRequests}>
+                    {(approval) => <ApprovalCard threadId={props.threadId} approval={approval} />}
+                  </For>
+                </div>
+              </Show>
+              <Show when={(props.message.fileArtifacts?.length ?? 0) > 0}>
+                <div class="mb-2 flex flex-col gap-1.5">
+                  <For each={props.message.fileArtifacts}>
+                    {(artifact) => <FileArtifactChip artifact={artifact} agent={props.agent} />}
+                  </For>
+                </div>
+              </Show>
+            </>
+          }
+        >
+          <div class="mb-2 rounded-md border border-neutral-300 bg-neutral-50/80 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/70">
+            <For each={props.message.timeline}>
+              {(item) =>
+                item.kind === "thought" ? (
+                  <RuntimeThoughtCard card={item} />
+                ) : item.kind === "tool_call" ? (
+                  <ToolCallStatusCard card={item} />
+                ) : item.kind === "custom_event" ? (
+                  <div class="py-1 text-[11px] text-neutral-700 dark:text-neutral-300">
+                    <span class="font-mono">{item.name}</span>
+                    <span class="ml-2 text-neutral-500 dark:text-neutral-400">{item.preview}</span>
+                  </div>
+                ) : item.kind === "approval" ? (
+                  <Show when={approvalsById().get(item.requestId)}>
+                    {(approval) => <ApprovalCard threadId={props.threadId} approval={approval()} />}
+                  </Show>
+                ) : (
+                  <Show when={artifactsById().get(item.eventId)}>
+                    {(artifact) => <FileArtifactChip artifact={artifact()} agent={props.agent} />}
+                  </Show>
+                )
+              }
+            </For>
+          </div>
+        </Show>
         <Show
           when={props.message.content.length > 0}
           fallback={
@@ -50,33 +119,7 @@ export default function MessageBubble(props: Props) {
             {props.message.errorMessage}
           </div>
         </Show>
-        <Show when={(props.message.approvalRequests?.length ?? 0) > 0}>
-          <div class="mt-2 flex flex-col gap-1.5">
-            <For each={props.message.approvalRequests}>
-              {(approval) => <ApprovalCard threadId={props.threadId} approval={approval} />}
-            </For>
-          </div>
-        </Show>
-        <Show when={(props.message.fileArtifacts?.length ?? 0) > 0}>
-          <div class="mt-2 flex flex-col gap-1.5">
-            <For each={props.message.fileArtifacts}>
-              {(artifact) => <FileArtifactChip artifact={artifact} agent={props.agent} />}
-            </For>
-          </div>
-        </Show>
-        <Show when={(props.message.runtimeTimeline?.length ?? 0) > 0}>
-          <div class="mt-2 rounded-md border border-neutral-300 bg-neutral-50/80 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/70">
-            <For each={props.message.runtimeTimeline}>
-              {(item) =>
-                item.kind === "thought" ? (
-                  <RuntimeThoughtCard card={item} />
-                ) : (
-                  <ToolCallStatusCard card={item} />
-                )
-              }
-            </For>
-          </div>
-        </Show>
+        <div class="mt-2 text-right text-[10px] opacity-60">{timeLabel()}</div>
       </div>
     </div>
   );

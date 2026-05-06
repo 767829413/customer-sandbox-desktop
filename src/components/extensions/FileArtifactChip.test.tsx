@@ -2,29 +2,20 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FileArtifact } from "../../lib/storage";
-import { downloadFile } from "../../lib/api";
-import { deleteWorkspaceFile } from "../../store";
+import { deleteWorkspaceFile, downloadWorkspaceFile } from "../../store";
 import FileArtifactChip from "./FileArtifactChip";
 
-vi.mock("../../lib/api", () => ({
-  downloadFile: vi.fn(),
-}));
-
 vi.mock("../../store", () => ({
-  store: {
-    settings: {
-      gatewayBaseUrl: "http://localhost:8080",
-      token: "test-token",
-    },
-  },
+  downloadWorkspaceFile: vi.fn(),
   deleteWorkspaceFile: vi.fn(),
 }));
 
-const downloadMock = vi.mocked(downloadFile);
+const downloadMock = vi.mocked(downloadWorkspaceFile);
 const deleteMock = vi.mocked(deleteWorkspaceFile);
 
 function makeArtifact(overrides: Partial<FileArtifact> = {}): FileArtifact {
   return {
+    eventId: "file_test_1",
     path: "workspace/random_cn.py",
     name: "random_cn.py",
     sizeBytes: 128,
@@ -66,14 +57,7 @@ describe("FileArtifactChip", () => {
     await waitFor(() => {
       expect(downloadMock).toHaveBeenCalledTimes(1);
     });
-    expect(downloadMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gatewayBaseUrl: "http://localhost:8080",
-        token: "test-token",
-      }),
-      "zeptoclaw",
-      "workspace/random_cn.py",
-    );
+    expect(downloadMock).toHaveBeenCalledWith("zeptoclaw", "workspace/random_cn.py");
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(clickSpy).toHaveBeenCalledTimes(1);
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1);

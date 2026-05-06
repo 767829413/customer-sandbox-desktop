@@ -54,6 +54,16 @@ export default function ToolCallStatusCard(props: Props) {
           {props.card.error}
         </div>
       </Show>
+      <Show when={props.card.resultPreview && props.card.resultPreview.trim().length > 0}>
+        {(preview) => (
+          <details class="ml-5 mt-1 rounded border border-neutral-300 bg-white/70 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/70">
+            <summary class="cursor-pointer text-neutral-600 dark:text-neutral-300">执行结果</summary>
+            <pre class="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-neutral-700 dark:text-neutral-200">
+              {preview()}
+            </pre>
+          </details>
+        )}
+      </Show>
     </div>
   );
 }

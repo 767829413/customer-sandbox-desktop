@@ -8,6 +8,7 @@ import {
   saveThreadsBundle,
   type ApprovalRequestCard,
   type FileArtifact,
+  type GenericCustomTimelineItem,
   type Message,
   type RuntimeThoughtCard,
   type Settings,
@@ -16,6 +17,7 @@ import {
 } from "./lib/storage";
 import {
   deleteFile,
+  downloadFile,
   listAgents,
   listFiles,
   postApprovalResponse,
@@ -32,6 +34,11 @@ import {
 // store with createEffect because that re-serializes on every keystroke.
 
 interface AppState {
+  capabilities: {
+    agentsApi: CapabilityStatus;
+    filesApi: CapabilityStatus;
+    approvalApi: CapabilityStatus;
+  };
   settings: Settings;
   availableAgents: string[];
   threads: Thread[];
@@ -52,9 +59,16 @@ interface AppState {
   };
 }
 
+type CapabilityStatus = "unknown" | "supported" | "unsupported";
+
 const initialSettings = loadSettings();
 const initialBundle = loadThreadsBundle();
 const [state, setState] = createStore<AppState>({
+  capabilities: {
+    agentsApi: "unknown",
+    filesApi: "unknown",
+    approvalApi: "unknown",
+  },
   settings: initialSettings,
   availableAgents: [initialSettings.defaultAgent],
   threads: initialBundle.threads,
@@ -120,13 +134,35 @@ export function deleteThread(threadId: string): void {
 }
 
 export function updateSettings(s: Settings): void {
-  setState("settings", s);
+  setState(
+    produce((st: AppState) => {
+      st.settings = s;
+      st.capabilities.agentsApi = "unknown";
+      st.capabilities.filesApi = "unknown";
+      st.capabilities.approvalApi = "unknown";
+      st.filesDrawer.open = false;
+      st.filesDrawer.agent = null;
+      st.filesDrawer.entries = [];
+      st.filesDrawer.errorMessage = null;
+      st.filesDrawer.loadingState = "idle";
+      st.filesDrawer.truncated = false;
+    }),
+  );
   saveSettings(s);
   void refreshAvailableAgents(s);
 }
 
 export function clearErrorBanner(): void {
   setState("errorBanner", null);
+}
+
+function markCapability(kind: keyof AppState["capabilities"], status: CapabilityStatus): void {
+  setState("capabilities", kind, status);
+}
+
+function isUnsupportedEndpointError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /HTTP\s+(404|405|501)\b/i.test(msg);
 }
 
 function normalizeAgents(agents: string[], fallback: string): string[] {
@@ -138,21 +174,24 @@ function normalizeAgents(agents: string[], fallback: string): string[] {
     out.push(trimmed);
   }
   if (out.length === 0) {
-    out.push(fallback.trim() || "zeptoclaw");
+    out.push(fallback.trim() || "default");
   }
   return out;
 }
 
 export async function refreshAvailableAgents(settingsOverride?: Settings): Promise<void> {
   const settings = settingsOverride ?? state.settings;
-  if (!settings.gatewayUrl.trim() || !settings.bearerToken.trim()) {
+  if (!settings.gatewayUrl.trim()) {
     setState("availableAgents", normalizeAgents([], settings.defaultAgent));
+    markCapability("agentsApi", "unknown");
     return;
   }
   try {
     const catalog = await listAgents(settings);
     setState("availableAgents", normalizeAgents(catalog.agents, catalog.defaultAgent));
-  } catch {
+    markCapability("agentsApi", "supported");
+  } catch (err) {
+    markCapability("agentsApi", isUnsupportedEndpointError(err) ? "unsupported" : "unknown");
     // Keep UX stable on transient errors; settings dialog surfaces details.
     setState("availableAgents", normalizeAgents([], settings.defaultAgent));
   }
@@ -167,6 +206,10 @@ export function toggleFilesDrawer(agent: string): void {
 }
 
 export function openFilesDrawer(agent: string): void {
+  if (state.capabilities.filesApi === "unsupported") {
+    setState("errorBanner", "当前服务端未实现文件扩展能力，已禁用 Files。");
+    return;
+  }
   setState(
     produce((s: AppState) => {
       s.filesDrawer.open = true;
@@ -198,6 +241,7 @@ export async function refreshFiles(): Promise<void> {
   );
   try {
     const result = await listFiles(state.settings, agent);
+    markCapability("filesApi", "supported");
     setState(
       produce((s: AppState) => {
         if (s.filesDrawer.agent !== agent) return;
@@ -208,10 +252,22 @@ export async function refreshFiles(): Promise<void> {
       }),
     );
   } catch (err) {
+    const unsupported = isUnsupportedEndpointError(err);
+    if (unsupported) {
+      markCapability("filesApi", "unsupported");
+      setState(
+        produce((s: AppState) => {
+          if (s.filesDrawer.agent !== agent) return;
+          s.filesDrawer.open = false;
+          s.filesDrawer.loadingState = "idle";
+          s.filesDrawer.errorMessage = null;
+        }),
+      );
+      setState("errorBanner", "当前服务端未实现文件扩展能力，Files 已自动隐藏。");
+      return;
+    }
     const rawMessage = err instanceof Error ? err.message : String(err);
-    const message = rawMessage.includes("HTTP 404")
-      ? "Gateway 当前版本不支持文件接口 (/v1/files)，请更新并重启 gateway。"
-      : rawMessage;
+    const message = rawMessage;
     setState(
       produce((s: AppState) => {
         if (s.filesDrawer.agent !== agent) return;
@@ -223,7 +279,20 @@ export async function refreshFiles(): Promise<void> {
 }
 
 export async function deleteWorkspaceFile(agent: string, path: string): Promise<void> {
-  await deleteFile(state.settings, agent, path);
+  if (state.capabilities.filesApi === "unsupported") {
+    throw new Error("当前服务端未实现文件扩展能力。");
+  }
+  try {
+    await deleteFile(state.settings, agent, path);
+    markCapability("filesApi", "supported");
+  } catch (err) {
+    if (isUnsupportedEndpointError(err)) {
+      markCapability("filesApi", "unsupported");
+      setState("errorBanner", "当前服务端未实现文件扩展能力，Files 已自动隐藏。");
+      throw new Error("当前服务端未实现文件扩展能力。");
+    }
+    throw err;
+  }
   markFileDeleted(agent, path);
   setState(
     produce((s: AppState) => {
@@ -234,20 +303,50 @@ export async function deleteWorkspaceFile(agent: string, path: string): Promise<
   persistThreads();
 }
 
+export async function downloadWorkspaceFile(agent: string, path: string): Promise<Blob> {
+  if (state.capabilities.filesApi === "unsupported") {
+    throw new Error("当前服务端未实现文件扩展能力。");
+  }
+  try {
+    const blob = await downloadFile(state.settings, agent, path);
+    markCapability("filesApi", "supported");
+    return blob;
+  } catch (err) {
+    if (isUnsupportedEndpointError(err)) {
+      markCapability("filesApi", "unsupported");
+      setState("errorBanner", "当前服务端未实现文件扩展能力，Files 已自动隐藏。");
+      throw new Error("当前服务端未实现文件扩展能力。");
+    }
+    throw err;
+  }
+}
+
 export async function respondApproval(
   threadId: string,
   requestId: string,
   decision: ApprovalDecision,
 ): Promise<void> {
+  if (state.capabilities.approvalApi === "unsupported") {
+    throw new Error("当前服务端未实现审批回填接口，无法在卡片中直接审批。");
+  }
   const runId = activeRunIdByThread.get(threadId);
   if (!runId) {
     throw new Error("No active run for this thread.");
   }
-  await postApprovalResponse(state.settings, threadId, {
-    runId,
-    requestId,
-    decision,
-  });
+  try {
+    await postApprovalResponse(state.settings, threadId, {
+      runId,
+      requestId,
+      decision,
+    });
+    markCapability("approvalApi", "supported");
+  } catch (err) {
+    if (isUnsupportedEndpointError(err)) {
+      markCapability("approvalApi", "unsupported");
+      throw new Error("当前服务端未实现审批回填接口，无法在卡片中直接审批。");
+    }
+    throw err;
+  }
 }
 
 /**
@@ -258,10 +357,6 @@ export async function respondApproval(
 export function sendMessage(content: string): void {
   const trimmed = content.trim();
   if (!trimmed) return;
-  if (!state.settings.bearerToken) {
-    setState("errorBanner", "Bearer token is empty — open Settings to fill it in.");
-    return;
-  }
 
   // Cancel any in-flight stream first; we don't want two producers
   // racing into the same thread.
@@ -306,7 +401,7 @@ export function sendMessage(content: string): void {
     {
       threadId,
       runId,
-      agent: thread.agent,
+      ...(thread.agent.trim().length > 0 ? { agent: thread.agent.trim() } : {}),
       messages: [{ role: "user", content: trimmed }],
     },
     {
@@ -401,50 +496,9 @@ function handleEvent(
       });
       return;
     case "CUSTOM":
-      if (ev.name === "ui:file_artifact") {
-        const artifact = parseFileArtifact(ev.value);
-        if (!artifact) return;
+      if (!handleKnownCustomEvent(threadId, assistantMsgId, ev.name, ev.value)) {
         mutateMessage(threadId, assistantMsgId, (m) => {
-          const list = m.fileArtifacts ?? (m.fileArtifacts = []);
-          list.push(artifact);
-        });
-        bumpThreadUpdated(threadId);
-        persistThreads();
-        if (
-          state.filesDrawer.open &&
-          state.filesDrawer.agent !== null &&
-          state.filesDrawer.agent === threadAgent(threadId)
-        ) {
-          void refreshFiles();
-        }
-      } else if (ev.name === "ui:approval_request") {
-        const approval = parseApprovalRequest(ev.value);
-        if (!approval) return;
-        mutateMessage(threadId, assistantMsgId, (m) => {
-          const list = m.approvalRequests ?? (m.approvalRequests = []);
-          list.push(approval);
-        });
-        bumpThreadUpdated(threadId);
-        persistThreads();
-      } else if (ev.name === "ui:approval_resolved") {
-        const resolved = parseApprovalResolved(ev.value);
-        if (!resolved) return;
-        markApprovalResolved(threadId, resolved.requestId, resolved.decision);
-        bumpThreadUpdated(threadId);
-        persistThreads();
-      } else if (ev.name === "ui:thinking_status") {
-        const thinking = parseThinkingStatus(ev.value);
-        if (!thinking) return;
-        mutateMessage(threadId, assistantMsgId, (m) => {
-          applyThinkingStatus(m, thinking);
-        });
-        bumpThreadUpdated(threadId);
-        persistThreads();
-      } else if (ev.name === "ui:tool_call") {
-        const toolCall = parseToolCallStatus(ev.value);
-        if (!toolCall) return;
-        mutateMessage(threadId, assistantMsgId, (m) => {
-          upsertToolCallTimeline(m, toolCall);
+          appendGenericCustomTimeline(m, ev.name, ev.value);
         });
         bumpThreadUpdated(threadId);
         persistThreads();
@@ -485,6 +539,80 @@ function handleEvent(
       persistThreads();
       return;
   }
+}
+
+function handleKnownCustomEvent(
+  threadId: string,
+  assistantMsgId: string,
+  name: string,
+  value: unknown,
+): boolean {
+  if (name === "ui:file_artifact") {
+    const artifact = parseFileArtifact(value);
+    if (!artifact) return false;
+    mutateMessage(threadId, assistantMsgId, (m) => {
+      const list = m.fileArtifacts ?? (m.fileArtifacts = []);
+      list.push(artifact);
+      const timeline = m.timeline ?? (m.timeline = []);
+      timeline.push({ kind: "file_artifact", eventId: artifact.eventId });
+    });
+    bumpThreadUpdated(threadId);
+    persistThreads();
+    if (
+      state.filesDrawer.open &&
+      state.filesDrawer.agent !== null &&
+      state.filesDrawer.agent === threadAgent(threadId)
+    ) {
+      void refreshFiles();
+    }
+    return true;
+  }
+  if (name === "ui:approval_request") {
+    const approval = parseApprovalRequest(value);
+    if (!approval) return false;
+    mutateMessage(threadId, assistantMsgId, (m) => {
+      const list = m.approvalRequests ?? (m.approvalRequests = []);
+      if (!list.some((existing) => existing.requestId === approval.requestId)) {
+        list.push(approval);
+      }
+      const timeline = m.timeline ?? (m.timeline = []);
+      if (!timeline.some((item) => item.kind === "approval" && item.requestId === approval.requestId)) {
+        timeline.push({ kind: "approval", requestId: approval.requestId });
+      }
+    });
+    bumpThreadUpdated(threadId);
+    persistThreads();
+    return true;
+  }
+  if (name === "ui:approval_resolved") {
+    const resolved = parseApprovalResolved(value);
+    if (!resolved) return false;
+    markApprovalResolved(threadId, resolved.requestId, resolved.decision);
+    bumpThreadUpdated(threadId);
+    persistThreads();
+    return true;
+  }
+  if (name === "ui:thinking_status") {
+    const thinking = parseThinkingStatus(value);
+    if (!thinking) return false;
+    mutateMessage(threadId, assistantMsgId, (m) => {
+      applyThinkingStatus(m, thinking);
+    });
+    bumpThreadUpdated(threadId);
+    persistThreads();
+    return true;
+  }
+  if (name === "ui:tool_call") {
+    const toolCall = parseToolCallStatus(value);
+    if (!toolCall) return false;
+    mutateMessage(threadId, assistantMsgId, (m) => {
+      upsertToolCallTimeline(m, toolCall);
+    });
+    bumpThreadUpdated(threadId);
+    persistThreads();
+    return true;
+  }
+  return false;
 }
 
 function abortActiveStream(): void {
@@ -576,7 +704,7 @@ function finalizeActiveThoughtsForThread(threadId: string): void {
 }
 
 function applyThinkingStatus(message: Message, event: ThinkingStatusEvent): void {
-  const timeline = message.runtimeTimeline ?? (message.runtimeTimeline = []);
+  const timeline = message.timeline ?? (message.timeline = []);
   const existing = timeline.find(
     (item): item is RuntimeThoughtCard =>
       item.kind === "thought" && item.thoughtId === event.thoughtId,
@@ -596,7 +724,7 @@ function applyThinkingStatus(message: Message, event: ThinkingStatusEvent): void
 }
 
 function finalizeActiveThoughtsInMessage(message: Message): void {
-  const timeline = message.runtimeTimeline;
+  const timeline = message.timeline;
   if (!timeline || timeline.length === 0) return;
   for (const item of timeline) {
     if (item.kind === "thought" && item.status === "active") {
@@ -606,7 +734,7 @@ function finalizeActiveThoughtsInMessage(message: Message): void {
 }
 
 function upsertToolCallTimeline(message: Message, incoming: ToolCallCard): void {
-  const timeline = message.runtimeTimeline ?? (message.runtimeTimeline = []);
+  const timeline = message.timeline ?? (message.timeline = []);
   const existing = timeline.find(
     (item): item is ToolCallCard =>
       item.kind === "tool_call" && item.toolCallId === incoming.toolCallId,
@@ -620,6 +748,39 @@ function upsertToolCallTimeline(message: Message, incoming: ToolCallCard): void 
   existing.status = incoming.status;
   existing.elapsedMs = incoming.elapsedMs;
   existing.error = incoming.error;
+  existing.resultPreview = incoming.resultPreview;
+}
+
+function appendGenericCustomTimeline(message: Message, name: string, value: unknown): void {
+  const timeline = message.timeline ?? (message.timeline = []);
+  const item: GenericCustomTimelineItem = {
+    kind: "custom_event",
+    name,
+    preview: summarizeCustomPayload(value),
+  };
+  timeline.push(item);
+}
+
+function summarizeCustomPayload(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return truncateForTimeline(trimmed.length > 0 ? trimmed : "(empty)");
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === "string") {
+      return truncateForTimeline(serialized);
+    }
+    return truncateForTimeline(String(value));
+  } catch {
+    return truncateForTimeline(String(value));
+  }
+}
+
+function truncateForTimeline(input: string, maxLen = 280): string {
+  if (input.length <= maxLen) return input;
+  return `${input.slice(0, maxLen)}…`;
 }
 
 function parseApprovalRequest(value: unknown): ApprovalRequestCard | null {
@@ -677,6 +838,10 @@ function parseFileArtifact(value: unknown): FileArtifact | null {
   if (obj.mime !== undefined && typeof obj.mime !== "string") return null;
   if (obj.operation !== "created" && obj.operation !== "modified") return null;
   return {
+    eventId:
+      typeof obj.eventId === "string" && obj.eventId.length > 0
+        ? obj.eventId
+        : `file_${newId()}`,
     path: obj.path,
     name: obj.name,
     sizeBytes: Math.floor(obj.sizeBytes),
@@ -723,6 +888,7 @@ function parseToolCallStatus(value: unknown): ToolCallCard | null {
     return null;
   }
   if (obj.error !== undefined && typeof obj.error !== "string") return null;
+  if (obj.resultPreview !== undefined && typeof obj.resultPreview !== "string") return null;
   return {
     kind: "tool_call",
     toolCallId: obj.toolCallId,
@@ -730,6 +896,7 @@ function parseToolCallStatus(value: unknown): ToolCallCard | null {
     status: obj.status,
     elapsedMs: typeof obj.elapsedMs === "number" ? Math.floor(obj.elapsedMs) : undefined,
     error: typeof obj.error === "string" ? obj.error : undefined,
+    resultPreview: typeof obj.resultPreview === "string" ? obj.resultPreview : undefined,
   };
 }
 

@@ -1,7 +1,7 @@
 import { Show, createMemo, createSignal } from "solid-js";
 import type { ApprovalDecision } from "../../lib/api";
 import type { ApprovalRequestCard } from "../../lib/storage";
-import { respondApproval } from "../../store";
+import { respondApproval, store } from "../../store";
 
 interface Props {
   threadId: string;
@@ -24,8 +24,15 @@ export default function ApprovalCard(props: Props) {
   const resolvedDecision = createMemo(
     () => props.approval.resolvedDecision ?? submittedDecision() ?? null,
   );
+  const approvalApiUnsupported = createMemo(
+    () => store.capabilities.approvalApi === "unsupported",
+  );
 
   const onDecision = async (decision: ApprovalDecision) => {
+    if (approvalApiUnsupported()) {
+      setError("当前服务端未实现审批回填接口，无法在卡片中直接审批。");
+      return;
+    }
     if (busyDecision() !== null || resolvedDecision() !== null) return;
     setBusyDecision(decision);
     setError(null);
@@ -64,33 +71,39 @@ export default function ApprovalCard(props: Props) {
       <div class="mt-2 flex flex-wrap gap-1.5">
         <button
           class="rounded bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
-          disabled={busyDecision() !== null || resolvedDecision() !== null}
+          disabled={busyDecision() !== null || resolvedDecision() !== null || approvalApiUnsupported()}
           onClick={() => void onDecision("approve")}
         >
           Approve
         </button>
         <button
           class="rounded bg-red-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
-          disabled={busyDecision() !== null || resolvedDecision() !== null}
+          disabled={busyDecision() !== null || resolvedDecision() !== null || approvalApiUnsupported()}
           onClick={() => void onDecision("deny")}
         >
           Deny
         </button>
         <button
           class="rounded border border-emerald-600 px-2 py-1 text-[11px] font-medium text-emerald-700 disabled:opacity-50 dark:text-emerald-300"
-          disabled={busyDecision() !== null || resolvedDecision() !== null}
+          disabled={busyDecision() !== null || resolvedDecision() !== null || approvalApiUnsupported()}
           onClick={() => void onDecision("approve_all")}
         >
           Approve all
         </button>
         <button
           class="rounded border border-red-600 px-2 py-1 text-[11px] font-medium text-red-700 disabled:opacity-50 dark:text-red-300"
-          disabled={busyDecision() !== null || resolvedDecision() !== null}
+          disabled={busyDecision() !== null || resolvedDecision() !== null || approvalApiUnsupported()}
           onClick={() => void onDecision("deny_all")}
         >
           Deny all
         </button>
       </div>
+
+      <Show when={approvalApiUnsupported()}>
+        <div class="mt-2 rounded bg-neutral-100 px-2 py-1 text-[11px] text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+          当前服务端未实现审批回填接口（/v1/threads/&lt;threadId&gt;/responses）。
+        </div>
+      </Show>
 
       <Show when={resolvedDecision()}>
         {(decision) => (

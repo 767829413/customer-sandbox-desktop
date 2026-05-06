@@ -1,7 +1,6 @@
 import { Show, createSignal } from "solid-js";
-import { downloadFile } from "../../lib/api";
 import type { FileArtifact } from "../../lib/storage";
-import { deleteWorkspaceFile, store } from "../../store";
+import { deleteWorkspaceFile, downloadWorkspaceFile } from "../../store";
 
 interface Props {
   agent: string;
@@ -27,7 +26,7 @@ export default function FileArtifactChip(props: Props) {
     setBusy("downloading");
     setError(null);
     try {
-      const blob = await downloadFile(store.settings, props.agent, props.artifact.path);
+      const blob = await downloadWorkspaceFile(props.agent, props.artifact.path);
       const url = URL.createObjectURL(blob);
       try {
         const link = document.createElement("a");
