@@ -102,7 +102,7 @@ pnpm tauri icon path/to/source-1024.png
 ## Known limitations (MVP)
 
 - Chat history lives only in this client's `localStorage`. Reinstall = lose history. Server-side WAL still records every turn — a future "list threads / get history" backend API will surface it cross-device.
-- The agent selector in the sidebar tells *the client* which agent a new chat targets, but the gateway currently always routes to `[agui].default_agent` from `gateway.toml`. Until the gateway accepts an `agent` field in `POST /v1/runs`, switching agents needs you to change the gateway config and restart.
+- The agent selector sets the default agent for **new chats** only. Existing chats stay bound to their original agent. `POST /v1/runs` now accepts optional `agent`; unknown names are rejected with `400`.
 - `RUN_LAGGED` (hub couldn't replay your `Last-Event-ID`) is shown as an error banner; the client does not auto-restart the run.
 - No file uploads, no tool-call rendering, no thread search/rename, no auto-update.
 - Single Gateway instance only — no multi-server switcher.
