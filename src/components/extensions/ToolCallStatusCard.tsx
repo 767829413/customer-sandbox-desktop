@@ -6,10 +6,21 @@ interface Props {
 }
 
 export default function ToolCallStatusCard(props: Props) {
+  const statusIcon = () => {
+    switch (props.card.status) {
+      case "started":
+        return "⏳";
+      case "done":
+        return "✓";
+      case "failed":
+        return "⚠";
+    }
+  };
+
   const statusLabel = () => {
     switch (props.card.status) {
       case "started":
-        return "started";
+        return "running";
       case "done":
         return "done";
       case "failed":
@@ -29,8 +40,9 @@ export default function ToolCallStatusCard(props: Props) {
   };
 
   return (
-    <div class="rounded-lg border border-neutral-300 bg-neutral-50/90 px-3 py-2 text-xs dark:border-neutral-700 dark:bg-neutral-900/70">
+    <div class="py-1 text-[11px]">
       <div class="flex items-center gap-2">
+        <span>{statusIcon()}</span>
         <span class="font-mono text-neutral-700 dark:text-neutral-200">{props.card.toolName}</span>
         <span class={statusClass()}>{statusLabel()}</span>
         <Show when={props.card.elapsedMs !== undefined}>
@@ -38,7 +50,7 @@ export default function ToolCallStatusCard(props: Props) {
         </Show>
       </div>
       <Show when={props.card.status === "failed" && props.card.error}>
-        <div class="mt-1 rounded bg-red-100 px-2 py-1 text-[11px] text-red-700 dark:bg-red-900/40 dark:text-red-200">
+        <div class="ml-5 mt-1 rounded bg-red-100 px-2 py-1 text-[11px] text-red-700 dark:bg-red-900/40 dark:text-red-200">
           {props.card.error}
         </div>
       </Show>

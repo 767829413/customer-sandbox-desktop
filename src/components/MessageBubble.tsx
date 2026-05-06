@@ -3,7 +3,6 @@ import { renderMarkdown } from "../lib/markdown";
 import type { Message } from "../lib/storage";
 import ApprovalCard from "./extensions/ApprovalCard";
 import FileArtifactChip from "./extensions/FileArtifactChip";
-import ThinkingStatusCard from "./extensions/ThinkingStatusCard";
 import ToolCallStatusCard from "./extensions/ToolCallStatusCard";
 
 interface Props {
@@ -64,17 +63,14 @@ export default function MessageBubble(props: Props) {
             </For>
           </div>
         </Show>
-        <Show when={(props.message.runtimeCards?.length ?? 0) > 0}>
-          <div class="mt-2 flex flex-col gap-1.5">
-            <For each={props.message.runtimeCards}>
-              {(card) =>
-                card.kind === "thinking" ? (
-                  <ThinkingStatusCard card={card} />
-                ) : (
-                  <ToolCallStatusCard card={card} />
-                )
-              }
-            </For>
+        <Show when={props.message.runtimeThinking === true}>
+          <div class="mt-2 rounded-md border border-sky-300 bg-sky-50/90 px-2 py-1 text-[11px] text-sky-900 dark:border-sky-800 dark:bg-sky-950/40 dark:text-sky-200">
+            Thinking...
+          </div>
+        </Show>
+        <Show when={(props.message.toolCalls?.length ?? 0) > 0}>
+          <div class="mt-2 rounded-md border border-neutral-300 bg-neutral-50/80 px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900/70">
+            <For each={props.message.toolCalls}>{(card) => <ToolCallStatusCard card={card} />}</For>
           </div>
         </Show>
       </div>

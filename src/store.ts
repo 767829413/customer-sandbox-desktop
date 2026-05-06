@@ -10,7 +10,6 @@ import {
   type FileArtifact,
   type Message,
   type Settings,
-  type ThinkingStatusCard,
   type Thread,
   type ToolCallCard,
 } from "./lib/storage";
@@ -340,6 +339,7 @@ function onStreamError(
       setState("errorBanner", `Connection lost: ${err2.message}`);
       mutateMessage(threadId, assistantMsgId, (m) => {
         m.streaming = false;
+        m.runtimeThinking = false;
         m.errorMessage = err2.message;
       });
       activeRunId = null;
@@ -435,10 +435,7 @@ function handleEvent(
         const thinking = parseThinkingStatus(ev.value);
         if (!thinking) return;
         mutateMessage(threadId, assistantMsgId, (m) => {
-          const list = m.runtimeCards ?? (m.runtimeCards = []);
-          const last = list[list.length - 1];
-          if (last?.kind === "thinking" && last.status === thinking.status) return;
-          list.push(thinking);
+          m.runtimeThinking = thinking === "thinking";
         });
         bumpThreadUpdated(threadId);
         persistThreads();
@@ -446,11 +443,8 @@ function handleEvent(
         const toolCall = parseToolCallStatus(ev.value);
         if (!toolCall) return;
         mutateMessage(threadId, assistantMsgId, (m) => {
-          const list = m.runtimeCards ?? (m.runtimeCards = []);
-          const existing = list.find(
-            (entry): entry is ToolCallCard =>
-              entry.kind === "tool_call" && entry.toolCallId === toolCall.toolCallId,
-          );
+          const list = m.toolCalls ?? (m.toolCalls = []);
+          const existing = list.find((entry) => entry.toolCallId === toolCall.toolCallId);
           if (!existing) {
             list.push(toolCall);
             return;
@@ -466,6 +460,7 @@ function handleEvent(
       return;
     case "RUN_FINISHED":
       setState("isStreaming", false);
+      clearRuntimeThinking(threadId);
       activeRunId = null;
       activeRunIdByThread.delete(threadId);
       persistThreads();
@@ -474,6 +469,7 @@ function handleEvent(
       setState("isStreaming", false);
       mutateMessage(threadId, assistantMsgId, (m) => {
         m.streaming = false;
+        m.runtimeThinking = false;
         m.errorMessage = ev.message;
       });
       setState("errorBanner", ev.message);
@@ -488,6 +484,7 @@ function handleEvent(
       setState("isStreaming", false);
       mutateMessage(threadId, assistantMsgId, (m) => {
         m.streaming = false;
+        m.runtimeThinking = false;
         m.errorMessage = "Reconnect dropped events. Please resend.";
       });
       setState("errorBanner", "Lost events on reconnect — message is incomplete.");
@@ -574,6 +571,20 @@ function bumpThreadUpdated(threadId: string): void {
   );
 }
 
+function clearRuntimeThinking(threadId: string): void {
+  setState(
+    "threads",
+    (t) => t.id === threadId,
+    produce((t: Thread) => {
+      for (const message of t.messages) {
+        if (message.runtimeThinking) {
+          message.runtimeThinking = false;
+        }
+      }
+    }),
+  );
+}
+
 function parseApprovalRequest(value: unknown): ApprovalRequestCard | null {
   if (!value || typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
@@ -638,11 +649,11 @@ function parseFileArtifact(value: unknown): FileArtifact | null {
   };
 }
 
-function parseThinkingStatus(value: unknown): ThinkingStatusCard | null {
+function parseThinkingStatus(value: unknown): "thinking" | "done" | null {
   if (!value || typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
   if (obj.status !== "thinking" && obj.status !== "done") return null;
-  return { kind: "thinking", status: obj.status };
+  return obj.status;
 }
 
 function parseToolCallStatus(value: unknown): ToolCallCard | null {
@@ -659,7 +670,6 @@ function parseToolCallStatus(value: unknown): ToolCallCard | null {
   }
   if (obj.error !== undefined && typeof obj.error !== "string") return null;
   return {
-    kind: "tool_call",
     toolCallId: obj.toolCallId,
     toolName: obj.toolName,
     status: obj.status,
