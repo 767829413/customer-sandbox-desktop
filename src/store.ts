@@ -7,9 +7,12 @@ import {
   saveSettings,
   saveThreadsBundle,
   type ApprovalRequestCard,
+  type FileArtifact,
   type Message,
   type Settings,
+  type ThinkingStatusCard,
   type Thread,
+  type ToolCallCard,
 } from "./lib/storage";
 import {
   deleteFile,
@@ -23,7 +26,6 @@ import {
   type FileEntry,
   type StreamHandle,
 } from "./lib/api";
-import type { FileArtifact } from "./lib/storage";
 
 // One Solid store for all UI-relevant state. Persistence is fanned out
 // to localStorage in `persist*` helpers — we don't observe the whole
@@ -429,6 +431,37 @@ function handleEvent(
         markApprovalResolved(threadId, resolved.requestId, resolved.decision);
         bumpThreadUpdated(threadId);
         persistThreads();
+      } else if (ev.name === "ui:thinking_status") {
+        const thinking = parseThinkingStatus(ev.value);
+        if (!thinking) return;
+        mutateMessage(threadId, assistantMsgId, (m) => {
+          const list = m.runtimeCards ?? (m.runtimeCards = []);
+          const last = list[list.length - 1];
+          if (last?.kind === "thinking" && last.status === thinking.status) return;
+          list.push(thinking);
+        });
+        bumpThreadUpdated(threadId);
+        persistThreads();
+      } else if (ev.name === "ui:tool_call") {
+        const toolCall = parseToolCallStatus(ev.value);
+        if (!toolCall) return;
+        mutateMessage(threadId, assistantMsgId, (m) => {
+          const list = m.runtimeCards ?? (m.runtimeCards = []);
+          const existing = list.find(
+            (entry): entry is ToolCallCard =>
+              entry.kind === "tool_call" && entry.toolCallId === toolCall.toolCallId,
+          );
+          if (!existing) {
+            list.push(toolCall);
+            return;
+          }
+          existing.toolName = toolCall.toolName;
+          existing.status = toolCall.status;
+          existing.elapsedMs = toolCall.elapsedMs;
+          existing.error = toolCall.error;
+        });
+        bumpThreadUpdated(threadId);
+        persistThreads();
       }
       return;
     case "RUN_FINISHED":
@@ -602,6 +635,36 @@ function parseFileArtifact(value: unknown): FileArtifact | null {
     mime: typeof obj.mime === "string" ? obj.mime : undefined,
     operation: obj.operation,
     deleted: false,
+  };
+}
+
+function parseThinkingStatus(value: unknown): ThinkingStatusCard | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  if (obj.status !== "thinking" && obj.status !== "done") return null;
+  return { kind: "thinking", status: obj.status };
+}
+
+function parseToolCallStatus(value: unknown): ToolCallCard | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.toolCallId !== "string" || obj.toolCallId.length === 0) return null;
+  if (typeof obj.toolName !== "string" || obj.toolName.length === 0) return null;
+  if (obj.status !== "started" && obj.status !== "done" && obj.status !== "failed") return null;
+  if (
+    obj.elapsedMs !== undefined &&
+    (typeof obj.elapsedMs !== "number" || !Number.isFinite(obj.elapsedMs) || obj.elapsedMs < 0)
+  ) {
+    return null;
+  }
+  if (obj.error !== undefined && typeof obj.error !== "string") return null;
+  return {
+    kind: "tool_call",
+    toolCallId: obj.toolCallId,
+    toolName: obj.toolName,
+    status: obj.status,
+    elapsedMs: typeof obj.elapsedMs === "number" ? Math.floor(obj.elapsedMs) : undefined,
+    error: typeof obj.error === "string" ? obj.error : undefined,
   };
 }
 

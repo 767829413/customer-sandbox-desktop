@@ -3,6 +3,8 @@ import { renderMarkdown } from "../lib/markdown";
 import type { Message } from "../lib/storage";
 import ApprovalCard from "./extensions/ApprovalCard";
 import FileArtifactChip from "./extensions/FileArtifactChip";
+import ThinkingStatusCard from "./extensions/ThinkingStatusCard";
+import ToolCallStatusCard from "./extensions/ToolCallStatusCard";
 
 interface Props {
   threadId: string;
@@ -59,6 +61,19 @@ export default function MessageBubble(props: Props) {
           <div class="mt-2 flex flex-col gap-1.5">
             <For each={props.message.fileArtifacts}>
               {(artifact) => <FileArtifactChip artifact={artifact} agent={props.agent} />}
+            </For>
+          </div>
+        </Show>
+        <Show when={(props.message.runtimeCards?.length ?? 0) > 0}>
+          <div class="mt-2 flex flex-col gap-1.5">
+            <For each={props.message.runtimeCards}>
+              {(card) =>
+                card.kind === "thinking" ? (
+                  <ThinkingStatusCard card={card} />
+                ) : (
+                  <ToolCallStatusCard card={card} />
+                )
+              }
             </For>
           </div>
         </Show>
