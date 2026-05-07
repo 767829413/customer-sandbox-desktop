@@ -96,11 +96,7 @@ export default function MessageBubble(props: Props) {
                     <RuntimeThoughtCard card={item} />
                   ) : item.kind === "tool_call" ? (
                     <ToolCallStatusCard card={item} />
-                  ) : item.kind === "a2ui" ? (
-                    <Show when={(props.message.a2uiMessages?.length ?? 0) > 0}>
-                      <A2uiSurfaceCard messages={props.message.a2uiMessages ?? []} />
-                    </Show>
-                  ) : item.kind === "custom_event" ? (
+                  ) : item.kind === "a2ui" ? null : item.kind === "custom_event" ? (
                     <div class="py-1 text-[11px] text-neutral-700 dark:text-neutral-300">
                       <span class="font-mono">{item.name}</span>
                       <span class="ml-2 text-neutral-500 dark:text-neutral-400">{item.preview}</span>
@@ -118,6 +114,11 @@ export default function MessageBubble(props: Props) {
               </For>
             </div>
           </details>
+        </Show>
+        <Show when={hasA2ui()}>
+          <div class="mb-2">
+            <A2uiSurfaceCard messages={props.message.a2uiMessages ?? []} />
+          </div>
         </Show>
         <Show
           when={renderedContent().length > 0}

@@ -620,10 +620,6 @@ function handleKnownCustomEvent(
     mutateMessage(threadId, assistantMsgId, (m) => {
       const list = m.a2uiMessages ?? (m.a2uiMessages = []);
       list.push(...messages);
-      const timeline = m.timeline ?? (m.timeline = []);
-      if (!timeline.some((item) => item.kind === "a2ui")) {
-        timeline.push({ kind: "a2ui" });
-      }
     });
     bumpThreadUpdated(threadId);
     persistThreads();

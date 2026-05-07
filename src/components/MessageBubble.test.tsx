@@ -50,6 +50,7 @@ describe("MessageBubble", () => {
 
     render(() => <MessageBubble threadId="thread_1" message={message} agent="zeptoclaw" />);
 
+    expect(screen.queryByText("A2UI surface")).not.toBeNull();
     expect(screen.queryByText("createSurface")).toBeNull();
     expect(screen.queryByText("(empty)")).toBeNull();
   });
