@@ -55,10 +55,16 @@ export default function MessageBubble(props: Props) {
       classList={{ "justify-end": isUser(), "justify-start": !isUser() }}
     >
       <div
-        class="max-w-[80%] rounded-2xl px-4 py-2 text-sm shadow-sm"
+        class="rounded-2xl px-4 py-2 text-sm shadow-sm"
         classList={{
           "bg-blue-600 text-white": isUser(),
           "bg-neutral-100 dark:bg-neutral-800": !isUser(),
+          // Assistant bubbles with an A2UI surface use a fixed assistant-column
+          // width so the chart doesn't shrink when the runtime timeline is
+          // collapsed (collapsed summary is much narrower than the open one,
+          // and the bubble would otherwise hug whichever side is widest).
+          "w-[80%]": !isUser() && hasA2ui(),
+          "max-w-[80%]": isUser() || !hasA2ui(),
         }}
       >
         <Show
