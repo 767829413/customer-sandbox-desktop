@@ -36,4 +36,21 @@ describe("MessageBubble", () => {
     expect(screen.queryByText("ui:fake_thing")).not.toBeNull();
     expect(screen.queryByText("{\"foo\":\"bar\"}")).not.toBeNull();
   });
+
+  it("strips a2ui markdown payload when structured A2UI messages exist", () => {
+    const message = makeAssistantMessage({
+      content: "```a2ui\n{\"version\":\"v0.9\",\"createSurface\":{\"surfaceId\":\"main\"}}\n```",
+      a2uiMessages: [
+        {
+          version: "v0.9",
+          createSurface: { surfaceId: "main", catalogId: "basic" },
+        },
+      ],
+    });
+
+    render(() => <MessageBubble threadId="thread_1" message={message} agent="zeptoclaw" />);
+
+    expect(screen.queryByText("createSurface")).toBeNull();
+    expect(screen.queryByText("(empty)")).toBeNull();
+  });
 });

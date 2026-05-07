@@ -5,6 +5,7 @@ export const AgUiCustomEventNames = {
   approvalResolved: "ui:approval_resolved",
   thinkingStatus: "ui:thinking_status",
   toolCall: "ui:tool_call",
+  a2ui: "ui:a2ui",
 } as const;
 
 export type AgUiCustomEventName =

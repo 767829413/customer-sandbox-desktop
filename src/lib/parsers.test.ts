@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseA2uiMessages,
   parseApprovalRequest,
   parseApprovalResolved,
   parseFileArtifact,
@@ -72,5 +73,35 @@ describe("parsers", () => {
     expect(parsed?.toolCallId).toBe("tool_1");
     expect(parsed?.status).toBe("failed");
     expect(parsed?.arguments).toContain("command");
+  });
+
+  it("parses a2ui single message payload", () => {
+    const parsed = parseA2uiMessages({
+      version: "v0.9",
+      createSurface: {
+        surfaceId: "main",
+        catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json",
+      },
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.length).toBe(1);
+    expect(parsed?.[0].createSurface).toBeTruthy();
+  });
+
+  it("parses a2ui wrapper messages payload", () => {
+    const parsed = parseA2uiMessages({
+      messages: [
+        {
+          version: "v0.9",
+          createSurface: { surfaceId: "main", catalogId: "basic" },
+        },
+        {
+          version: "v0.9",
+          updateDataModel: { surfaceId: "main", path: "/", value: { title: "hi" } },
+        },
+      ],
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.length).toBe(2);
   });
 });

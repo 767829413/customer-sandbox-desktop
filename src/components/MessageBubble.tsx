@@ -2,6 +2,7 @@ import { For, Show, createMemo } from "solid-js";
 import { renderMarkdown } from "../lib/markdown";
 import type { ApprovalRequestCard, FileArtifact, Message } from "../lib/storage";
 import ApprovalCard from "./extensions/ApprovalCard";
+import A2uiSurfaceCard from "./extensions/A2uiSurfaceCard";
 import FileArtifactChip from "./extensions/FileArtifactChip";
 import RuntimeThoughtCard from "./extensions/RuntimeThoughtCard";
 import ToolCallStatusCard from "./extensions/ToolCallStatusCard";
@@ -12,8 +13,11 @@ interface Props {
   agent: string;
 }
 
+function stripA2uiBlocks(content: string): string {
+  return content.replace(/```a2ui[\s\S]*?```/gi, "").trim();
+}
+
 export default function MessageBubble(props: Props) {
-  const html = createMemo(() => renderMarkdown(props.message.content));
   const isUser = () => props.message.role === "user";
   const timeLabel = createMemo(() =>
     new Date(props.message.createdAtMs).toLocaleTimeString([], {
@@ -39,6 +43,11 @@ export default function MessageBubble(props: Props) {
     return map;
   });
   const timelineCount = createMemo(() => props.message.timeline?.length ?? 0);
+  const hasA2ui = createMemo(() => (props.message.a2uiMessages?.length ?? 0) > 0);
+  const renderedContent = createMemo(() =>
+    hasA2ui() ? stripA2uiBlocks(props.message.content) : props.message.content,
+  );
+  const html = createMemo(() => renderMarkdown(renderedContent()));
 
   return (
     <div
@@ -87,6 +96,10 @@ export default function MessageBubble(props: Props) {
                     <RuntimeThoughtCard card={item} />
                   ) : item.kind === "tool_call" ? (
                     <ToolCallStatusCard card={item} />
+                  ) : item.kind === "a2ui" ? (
+                    <Show when={(props.message.a2uiMessages?.length ?? 0) > 0}>
+                      <A2uiSurfaceCard messages={props.message.a2uiMessages ?? []} />
+                    </Show>
                   ) : item.kind === "custom_event" ? (
                     <div class="py-1 text-[11px] text-neutral-700 dark:text-neutral-300">
                       <span class="font-mono">{item.name}</span>
@@ -107,11 +120,15 @@ export default function MessageBubble(props: Props) {
           </details>
         </Show>
         <Show
-          when={props.message.content.length > 0}
+          when={renderedContent().length > 0}
           fallback={
             <Show
               when={props.message.streaming}
-              fallback={<span class="italic opacity-60">(empty)</span>}
+              fallback={
+                <Show when={!hasA2ui()}>
+                  <span class="italic opacity-60">(empty)</span>
+                </Show>
+              }
             >
               <span class="inline-flex gap-1">
                 <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-current opacity-60"></span>

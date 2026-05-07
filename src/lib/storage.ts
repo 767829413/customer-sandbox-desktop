@@ -29,6 +29,7 @@ export interface Message {
   timeline?: MessageTimelineItem[];
   approvalRequests?: ApprovalRequestCard[];
   fileArtifacts?: FileArtifact[];
+  a2uiMessages?: Record<string, unknown>[];
 }
 
 export interface ApprovalRequestCard {
@@ -89,10 +90,15 @@ export interface GenericCustomTimelineItem {
   preview: string;
 }
 
+export interface A2uiTimelineItem {
+  kind: "a2ui";
+}
+
 export type MessageTimelineItem =
   | RuntimeTimelineItem
   | ApprovalTimelineItem
   | FileArtifactTimelineItem
+  | A2uiTimelineItem
   | GenericCustomTimelineItem;
 
 export interface Thread {

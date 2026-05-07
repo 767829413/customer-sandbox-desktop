@@ -127,3 +127,39 @@ export function parseToolCallStatus(value: unknown): ToolCallCard | null {
     resultPreview: typeof obj.resultPreview === "string" ? obj.resultPreview : undefined,
   };
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isA2uiMessageShape(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  return (
+    "createSurface" in value ||
+    "updateComponents" in value ||
+    "updateDataModel" in value ||
+    "deleteSurface" in value ||
+    "beginRendering" in value ||
+    "surfaceUpdate" in value ||
+    "dataModelUpdate" in value
+  );
+}
+
+export function parseA2uiMessages(value: unknown): Record<string, unknown>[] | null {
+  if (Array.isArray(value)) {
+    const items = value.filter(isA2uiMessageShape);
+    return items.length > 0 ? items : null;
+  }
+  if (!isRecord(value)) return null;
+  if (Array.isArray(value.messages)) {
+    const items = value.messages.filter(isA2uiMessageShape);
+    return items.length > 0 ? items : null;
+  }
+  if (isRecord(value.message) && isA2uiMessageShape(value.message)) {
+    return [value.message];
+  }
+  if (isA2uiMessageShape(value)) {
+    return [value];
+  }
+  return null;
+}

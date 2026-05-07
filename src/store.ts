@@ -8,6 +8,7 @@ import {
 } from "./lib/capability";
 import { AgUiCustomEventNames } from "./lib/agui-custom-events";
 import {
+  parseA2uiMessages,
   parseApprovalRequest,
   parseApprovalResolved,
   parseFileArtifact,
@@ -608,6 +609,21 @@ function handleKnownCustomEvent(
     if (!toolCall) return false;
     mutateMessage(threadId, assistantMsgId, (m) => {
       upsertToolCallTimeline(m, toolCall);
+    });
+    bumpThreadUpdated(threadId);
+    persistThreads();
+    return true;
+  }
+  if (name === AgUiCustomEventNames.a2ui) {
+    const messages = parseA2uiMessages(value);
+    if (!messages) return false;
+    mutateMessage(threadId, assistantMsgId, (m) => {
+      const list = m.a2uiMessages ?? (m.a2uiMessages = []);
+      list.push(...messages);
+      const timeline = m.timeline ?? (m.timeline = []);
+      if (!timeline.some((item) => item.kind === "a2ui")) {
+        timeline.push({ kind: "a2ui" });
+      }
     });
     bumpThreadUpdated(threadId);
     persistThreads();
