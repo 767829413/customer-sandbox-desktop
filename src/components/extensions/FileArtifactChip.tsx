@@ -1,5 +1,6 @@
 import { Show, createSignal } from "solid-js";
 import type { FileArtifact } from "../../lib/storage";
+import { confirmAction, saveBlobToDisk } from "../../lib/native-download";
 import { deleteWorkspaceFile, downloadWorkspaceFile } from "../../store";
 
 interface Props {
@@ -17,9 +18,10 @@ export default function FileArtifactChip(props: Props) {
     if (props.artifact.deleted || busy() !== "idle") return;
     if (
       props.artifact.sizeBytes > LARGE_FILE_BYTES &&
-      !confirm(
+      !(await confirmAction(
         `File is ${formatBytes(props.artifact.sizeBytes)}. Continue download?`,
-      )
+        "Large file",
+      ))
     ) {
       return;
     }
@@ -27,18 +29,7 @@ export default function FileArtifactChip(props: Props) {
     setError(null);
     try {
       const blob = await downloadWorkspaceFile(props.agent, props.artifact.path);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = props.artifact.name;
-      link.style.display = "none";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      // Defer revoke: link.click() only enqueues the download, the browser
-      // fetches the blob URL on a later tick. A synchronous revoke here
-      // 404s the in-flight download silently.
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await saveBlobToDisk(blob, props.artifact.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -49,9 +40,10 @@ export default function FileArtifactChip(props: Props) {
   const onDelete = async () => {
     if (props.artifact.deleted || busy() !== "idle") return;
     if (
-      !confirm(
+      !(await confirmAction(
         `Delete "${props.artifact.name}"?\nThis workspace is shared across all chats with agent ${props.agent}.`,
-      )
+        "Delete file",
+      ))
     ) {
       return;
     }

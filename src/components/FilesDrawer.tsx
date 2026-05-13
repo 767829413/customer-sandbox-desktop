@@ -1,4 +1,5 @@
 import { For, Show, createSignal } from "solid-js";
+import { confirmAction, saveBlobToDisk } from "../lib/native-download";
 import {
   closeFilesDrawer,
   downloadWorkspaceFile,
@@ -22,7 +23,10 @@ export default function FilesDrawer() {
     if (!store.filesDrawer.agent || busyPath() !== null) return;
     if (
       sizeBytes > LARGE_FILE_BYTES &&
-      !confirm(`File is ${formatBytes(sizeBytes)}. Continue download?`)
+      !(await confirmAction(
+        `File is ${formatBytes(sizeBytes)}. Continue download?`,
+        "Large file",
+      ))
     ) {
       return;
     }
@@ -30,18 +34,7 @@ export default function FilesDrawer() {
     setLocalError(null);
     try {
       const blob = await downloadWorkspaceFile(store.filesDrawer.agent, path);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = name;
-      link.style.display = "none";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      // Defer revoke: link.click() only enqueues the download, the browser
-      // fetches the blob URL on a later tick. A synchronous revoke here
-      // 404s the in-flight download silently.
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await saveBlobToDisk(blob, name);
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -52,9 +45,10 @@ export default function FilesDrawer() {
   const onDelete = async (path: string, name: string) => {
     if (!store.filesDrawer.agent || busyPath() !== null) return;
     if (
-      !confirm(
+      !(await confirmAction(
         `Delete "${name}"?\nThis workspace is shared across all chats with agent ${store.filesDrawer.agent}.`,
-      )
+        "Delete file",
+      ))
     ) {
       return;
     }
