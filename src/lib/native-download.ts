@@ -28,12 +28,16 @@ export async function confirmAction(
   title = "Confirm",
 ): Promise<boolean> {
   if (!isTauri()) {
-    return window.confirm(message);
+    const ok = window.confirm(message);
+    console.debug("[confirmAction] non-tauri window.confirm =>", ok);
+    return ok;
   }
   try {
-    return await ask(message, { title, kind: "warning" });
+    const ok = await ask(message, { title, kind: "warning" });
+    console.debug("[confirmAction] tauri dialog.ask =>", ok, "title=", title);
+    return ok;
   } catch (err) {
-    console.warn("dialog.ask failed; falling back to false", err);
+    console.warn("[confirmAction] dialog.ask threw, returning false", err);
     return false;
   }
 }

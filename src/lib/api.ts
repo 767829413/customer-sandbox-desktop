@@ -310,6 +310,13 @@ export async function deleteFile(
     method: "DELETE",
     headers: authRequestHeaders(settings, "application/json"),
   });
+  // DELETE is idempotent — 404 / 410 mean "already gone", which is the
+  // outcome the caller wanted. Surfacing them as errors makes a perfectly
+  // successful 200 followed by a stray double-click look like a failure.
+  if (resp.status === 404 || resp.status === 410) {
+    console.debug("[deleteFile] treating", resp.status, "as idempotent success", { agent, path });
+    return;
+  }
   if (!resp.ok) {
     throw await responseError(resp);
   }

@@ -54,10 +54,15 @@ export default function FilesDrawer() {
     }
     setBusyPath(path);
     setLocalError(null);
+    console.debug("[FilesDrawer.onDelete] requesting delete", { path, name });
     try {
       await deleteWorkspaceFile(store.filesDrawer.agent, path);
-      await refreshFiles();
+      console.debug("[FilesDrawer.onDelete] success", { path });
+      // Note: deleteWorkspaceFile already removes the entry from the
+      // store, so no explicit refresh is needed here. A stray refresh
+      // would only race with the optimistic filter.
     } catch (err) {
+      console.warn("[FilesDrawer.onDelete] failed", { path, err });
       setLocalError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusyPath(null);
