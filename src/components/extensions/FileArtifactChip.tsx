@@ -28,17 +28,17 @@ export default function FileArtifactChip(props: Props) {
     try {
       const blob = await downloadWorkspaceFile(props.agent, props.artifact.path);
       const url = URL.createObjectURL(blob);
-      try {
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = props.artifact.name;
-        link.style.display = "none";
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = props.artifact.name;
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Defer revoke: link.click() only enqueues the download, the browser
+      // fetches the blob URL on a later tick. A synchronous revoke here
+      // 404s the in-flight download silently.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
