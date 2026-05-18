@@ -31,6 +31,7 @@ import {
 import {
   deleteFile,
   downloadFile,
+  FileMissingError,
   FileNotTextError,
   FilePreconditionFailedError,
   FileTooLargeError,
@@ -450,13 +451,15 @@ export async function openFileEditor(agent: string, path: string): Promise<void>
     );
   } catch (err) {
     const message =
-      err instanceof FileTooLargeError
-        ? "File is too large to edit (limit is 5 MB)."
-        : err instanceof FileNotTextError
-          ? "File is not UTF-8 text. Use Download to fetch the binary."
-          : err instanceof Error
-            ? err.message
-            : String(err);
+      err instanceof FileMissingError
+        ? `${err.message} The file list was refreshed.`
+        : err instanceof FileTooLargeError
+          ? "File is too large to edit (limit is 5 MB)."
+          : err instanceof FileNotTextError
+            ? "File is not UTF-8 text. Use Download to fetch the binary."
+            : err instanceof Error
+              ? err.message
+              : String(err);
     setState(
       produce((s: AppState) => {
         if (s.fileEditor.agent !== agent || s.fileEditor.path !== path) return;
@@ -464,6 +467,14 @@ export async function openFileEditor(agent: string, path: string): Promise<void>
         s.fileEditor.errorMessage = message;
       }),
     );
+    // The drawer is almost certainly showing stale entries when we
+    // see a 404 — refresh it so the ghost row disappears and the user
+    // can pick a file that actually exists.
+    if (err instanceof FileMissingError) {
+      if (state.filesDrawer.open && state.filesDrawer.agent === agent) {
+        void refreshFiles();
+      }
+    }
   }
 }
 
@@ -531,11 +542,14 @@ export async function saveFileEditor(options: { force?: boolean } = {}): Promise
     return true;
   } catch (err) {
     const isConflict = err instanceof FilePreconditionFailedError;
+    const isMissing = err instanceof FileMissingError;
     const message = isConflict
       ? "File was modified on disk since you opened it. Click Save again to overwrite."
-      : err instanceof Error
-        ? err.message
-        : String(err);
+      : isMissing
+        ? `${(err as FileMissingError).message} Cannot save here.`
+        : err instanceof Error
+          ? err.message
+          : String(err);
     setState(
       produce((s: AppState) => {
         if (s.fileEditor.agent !== agent || s.fileEditor.path !== path) return;

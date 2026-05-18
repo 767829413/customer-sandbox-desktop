@@ -329,6 +329,18 @@ export class FileNotTextError extends Error {
   }
 }
 
+/**
+ * GET / PUT returned 404. Typically means the drawer is showing a
+ * stale list — surfaced separately so callers can trigger an automatic
+ * refresh instead of just hanging an opaque error in the UI.
+ */
+export class FileMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FileMissingError";
+  }
+}
+
 export interface FileContent {
   text: string;
   etag: string | null;
@@ -358,6 +370,9 @@ export async function loadFileContent(
     method: "GET",
     headers: authRequestHeaders(settings, "*/*"),
   });
+  if (resp.status === 404) {
+    throw new FileMissingError(`File "${path}" is no longer in the workspace.`);
+  }
   if (!resp.ok) {
     throw await responseError(resp);
   }
@@ -421,6 +436,11 @@ export async function saveFileContent(
     headers,
     body: text,
   });
+  if (resp.status === 404) {
+    throw new FileMissingError(
+      `Cannot save: parent directory for "${path}" does not exist in the workspace.`,
+    );
+  }
   if (resp.status === 412) {
     throw new FilePreconditionFailedError(
       "File was modified on disk since you opened it.",
