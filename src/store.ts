@@ -127,6 +127,15 @@ export function newThread(agent?: string): Thread {
     }),
   );
   persistThreads();
+  // If the agent catalog hasn't been confirmed yet (initial mount
+  // failed because the gateway wasn't reachable), opportunistically
+  // refresh it here. The dropdown self-heals the next time the user
+  // hits "+ New Chat" instead of being stuck on a fallback list of
+  // just the default agent. Successful state ("supported") short-
+  // circuits, so this is free in the happy path.
+  if (state.capabilities.agentsApi !== "supported") {
+    void refreshAvailableAgents();
+  }
   return t;
 }
 
@@ -208,6 +217,11 @@ function normalizeAgents(agents: string[], fallback: string): string[] {
   return out;
 }
 
+// Tracks whether a background retry is already scheduled so we don't
+// pile up timers if multiple call sites notice the fallback state at
+// once (e.g. `newThread()` racing with the initial mount).
+let agentRefreshRetryScheduled = false;
+
 export async function refreshAvailableAgents(settingsOverride?: Settings): Promise<void> {
   const settings = settingsOverride ?? state.settings;
   if (!settings.gatewayUrl.trim()) {
@@ -219,10 +233,23 @@ export async function refreshAvailableAgents(settingsOverride?: Settings): Promi
     const catalog = await listAgents(settings);
     setState("availableAgents", normalizeAgents(catalog.agents, catalog.defaultAgent));
     markCapability("agentsApi", "supported");
+    agentRefreshRetryScheduled = false;
   } catch (err) {
-    markCapability("agentsApi", isUnsupportedEndpointError(err) ? "unsupported" : "unknown");
-    // Keep UX stable on transient errors; settings dialog surfaces details.
+    const unsupported = isUnsupportedEndpointError(err);
+    markCapability("agentsApi", unsupported ? "unsupported" : "unknown");
+    // Keep UX stable on transient errors; settings dialog surfaces
+    // details. Schedule one delayed retry for the "gateway not yet
+    // reachable on app launch" case so the agent dropdown self-heals
+    // without the user having to re-open Settings. Permanent failures
+    // (`unsupported`) skip the retry — the endpoint isn't coming back.
     setState("availableAgents", normalizeAgents([], settings.defaultAgent));
+    if (!unsupported && !agentRefreshRetryScheduled) {
+      agentRefreshRetryScheduled = true;
+      setTimeout(() => {
+        agentRefreshRetryScheduled = false;
+        void refreshAvailableAgents();
+      }, 3000);
+    }
   }
 }
 
