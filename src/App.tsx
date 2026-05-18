@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import ChatArea from "./components/ChatArea";
+import FileEditor from "./components/FileEditor";
 import FilesDrawer from "./components/FilesDrawer";
 import Sidebar from "./components/Sidebar";
 import SettingsDialog from "./components/SettingsDialog";
@@ -14,6 +15,7 @@ export default function App() {
         <ChatArea />
         <FilesDrawer />
       </main>
+      <FileEditor />
       <SettingsDialog
         open={settingsOpen()}
         onClose={() => setSettingsOpen(false)}

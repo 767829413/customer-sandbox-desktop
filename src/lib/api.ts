@@ -301,6 +301,150 @@ export async function downloadFile(
   return resp.blob();
 }
 
+/**
+ * Editor PUT bounced because the on-disk version's ETag differs from
+ * the one the client started editing. Surfaced separately so the UI
+ * can offer "overwrite anyway" instead of just an opaque error.
+ */
+export class FilePreconditionFailedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FilePreconditionFailedError";
+  }
+}
+
+/** Server refused to read/write the file because it's too large for the editor. */
+export class FileTooLargeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FileTooLargeError";
+  }
+}
+
+/** File exists but is not UTF-8 text (binary, BOM-less Latin-1, etc.). */
+export class FileNotTextError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FileNotTextError";
+  }
+}
+
+export interface FileContent {
+  text: string;
+  etag: string | null;
+  mime: string | null;
+  sizeBytes: number;
+}
+
+export interface SaveFileResult {
+  etag: string | null;
+  mtimeMs: number | null;
+  sizeBytes: number;
+}
+
+/**
+ * Client-side hard cap mirroring `gateway::http::files::PUT_MAX_BYTES`.
+ * Keeping them in sync avoids a round-trip that the server would just
+ * 413 anyway.
+ */
+export const EDITOR_MAX_BYTES = 5 * 1024 * 1024;
+
+export async function loadFileContent(
+  settings: Settings,
+  agent: string,
+  path: string,
+): Promise<FileContent> {
+  const resp = await fetch(fileApiUrl(settings, "/v1/files/content", agent, path), {
+    method: "GET",
+    headers: authRequestHeaders(settings, "*/*"),
+  });
+  if (!resp.ok) {
+    throw await responseError(resp);
+  }
+  const blob = await resp.blob();
+  if (blob.size > EDITOR_MAX_BYTES) {
+    throw new FileTooLargeError(
+      `File is ${blob.size} bytes; editor limit is ${EDITOR_MAX_BYTES} bytes.`,
+    );
+  }
+  // We always pull the body as text and then sanity-check that the
+  // decoded string is actually UTF-8. If the file is binary the round
+  // trip text→buffer→length usually still matches, so additionally
+  // walk the byte stream and reject the request whenever we hit a
+  // NUL or invalid UTF-8 marker.
+  const buf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  if (looksBinary(bytes)) {
+    throw new FileNotTextError("File does not look like UTF-8 text.");
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new FileNotTextError("File is not valid UTF-8.");
+  }
+  return {
+    text,
+    etag: resp.headers.get("etag"),
+    mime: resp.headers.get("content-type"),
+    sizeBytes: blob.size,
+  };
+}
+
+function looksBinary(bytes: Uint8Array): boolean {
+  // NUL byte is the canonical "this is binary" smell for text editors;
+  // grep, less, git all use the same heuristic. Keep this cheap — large
+  // files were already rejected above by EDITOR_MAX_BYTES.
+  const cap = Math.min(bytes.length, 8192);
+  for (let i = 0; i < cap; i++) {
+    if (bytes[i] === 0) return true;
+  }
+  return false;
+}
+
+export async function saveFileContent(
+  settings: Settings,
+  agent: string,
+  path: string,
+  text: string,
+  options: { ifMatchEtag?: string | null } = {},
+): Promise<SaveFileResult> {
+  const headers: Record<string, string> = {
+    ...(authRequestHeaders(settings, "application/json") as Record<string, string>),
+    "Content-Type": "text/plain; charset=utf-8",
+  };
+  if (options.ifMatchEtag) {
+    headers["If-Match"] = options.ifMatchEtag;
+  }
+  const resp = await fetch(fileApiUrl(settings, "/v1/files/content", agent, path), {
+    method: "PUT",
+    headers,
+    body: text,
+  });
+  if (resp.status === 412) {
+    throw new FilePreconditionFailedError(
+      "File was modified on disk since you opened it.",
+    );
+  }
+  if (resp.status === 413) {
+    throw new FileTooLargeError(
+      `File body exceeds the ${EDITOR_MAX_BYTES}-byte editor limit.`,
+    );
+  }
+  if (!resp.ok) {
+    throw await responseError(resp);
+  }
+  const body = (await resp.json().catch(() => ({}))) as {
+    sizeBytes?: number;
+    mtimeMs?: number;
+  };
+  return {
+    etag: resp.headers.get("etag"),
+    mtimeMs: typeof body.mtimeMs === "number" ? body.mtimeMs : null,
+    sizeBytes: typeof body.sizeBytes === "number" ? body.sizeBytes : text.length,
+  };
+}
+
 export async function deleteFile(
   settings: Settings,
   agent: string,

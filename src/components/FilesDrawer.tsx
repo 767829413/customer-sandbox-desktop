@@ -4,9 +4,11 @@ import {
   closeFilesDrawer,
   downloadWorkspaceFile,
   deleteWorkspaceFile,
+  openFileEditor,
   refreshFiles,
   store,
 } from "../store";
+import { classifyForEditor } from "../lib/fileEditor";
 
 const LARGE_FILE_BYTES = 50 * 1024 * 1024;
 
@@ -129,41 +131,72 @@ export default function FilesDrawer() {
           >
             <div class="flex flex-col gap-1">
               <For each={store.filesDrawer.entries}>
-                {(entry) => (
-                  <div class="rounded border border-neutral-200 px-2 py-2 text-xs dark:border-neutral-800">
-                    <div class="flex items-start gap-2">
-                      <span class="pt-0.5">{entry.isDir ? "📁" : "📄"}</span>
-                      <div class="min-w-0 flex-1">
-                        <div class="truncate font-medium">{entry.name}</div>
-                        <div class="truncate text-neutral-500 dark:text-neutral-400">
-                          {entry.path}
+                {(entry) => {
+                  const verdict = classifyForEditor(entry);
+                  const editTitle =
+                    verdict.editable
+                      ? "Edit"
+                      : verdict.reason === "directory"
+                        ? "Cannot edit a directory"
+                        : verdict.reason === "too-large"
+                          ? "File is too large to edit (5 MB limit)"
+                          : "Binary file — download instead";
+                  const onOpen = () => {
+                    if (!verdict.editable || !store.filesDrawer.agent) return;
+                    void openFileEditor(store.filesDrawer.agent, entry.path);
+                  };
+                  return (
+                    <div
+                      class="rounded border border-neutral-200 px-2 py-2 text-xs dark:border-neutral-800"
+                      classList={{
+                        "cursor-pointer hover:border-blue-300 dark:hover:border-blue-600":
+                          verdict.editable,
+                      }}
+                      onDblClick={onOpen}
+                      title={verdict.editable ? "Double-click to edit" : undefined}
+                    >
+                      <div class="flex items-start gap-2">
+                        <span class="pt-0.5">{entry.isDir ? "📁" : "📄"}</span>
+                        <div class="min-w-0 flex-1">
+                          <div class="truncate font-medium">{entry.name}</div>
+                          <div class="truncate text-neutral-500 dark:text-neutral-400">
+                            {entry.path}
+                          </div>
+                          <div class="text-neutral-500 dark:text-neutral-400">
+                            {entry.isDir ? "directory" : formatBytes(entry.sizeBytes)} ·{" "}
+                            {formatTime(entry.mtimeMs)}
+                          </div>
                         </div>
-                        <div class="text-neutral-500 dark:text-neutral-400">
-                          {entry.isDir ? "directory" : formatBytes(entry.sizeBytes)} ·{" "}
-                          {formatTime(entry.mtimeMs)}
+                        <div class="flex shrink-0 items-center gap-1">
+                          <button
+                            class="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-blue-100 hover:text-blue-700 disabled:opacity-40 dark:hover:bg-blue-900/60 dark:hover:text-blue-200"
+                            disabled={!verdict.editable || busyPath() !== null}
+                            onClick={onOpen}
+                            title={editTitle}
+                          >
+                            ✎
+                          </button>
+                          <button
+                            class="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-neutral-200 hover:text-neutral-800 disabled:opacity-40 dark:hover:bg-neutral-700 dark:hover:text-neutral-100"
+                            disabled={entry.isDir || busyPath() !== null}
+                            onClick={() => void onDownload(entry.path, entry.name, entry.sizeBytes)}
+                            title="Download"
+                          >
+                            ⬇
+                          </button>
+                          <button
+                            class="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-red-100 hover:text-red-700 disabled:opacity-40 dark:hover:bg-red-900/60 dark:hover:text-red-200"
+                            disabled={entry.isDir || busyPath() !== null}
+                            onClick={() => void onDelete(entry.path, entry.name)}
+                            title="Delete"
+                          >
+                            🗑
+                          </button>
                         </div>
-                      </div>
-                      <div class="flex shrink-0 items-center gap-1">
-                        <button
-                          class="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-neutral-200 hover:text-neutral-800 disabled:opacity-40 dark:hover:bg-neutral-700 dark:hover:text-neutral-100"
-                          disabled={entry.isDir || busyPath() !== null}
-                          onClick={() => void onDownload(entry.path, entry.name, entry.sizeBytes)}
-                          title="Download"
-                        >
-                          ⬇
-                        </button>
-                        <button
-                          class="rounded px-1.5 py-0.5 text-neutral-500 hover:bg-red-100 hover:text-red-700 disabled:opacity-40 dark:hover:bg-red-900/60 dark:hover:text-red-200"
-                          disabled={entry.isDir || busyPath() !== null}
-                          onClick={() => void onDelete(entry.path, entry.name)}
-                          title="Delete"
-                        >
-                          🗑
-                        </button>
                       </div>
                     </div>
-                  </div>
-                )}
+                  );
+                }}
               </For>
             </div>
           </Show>

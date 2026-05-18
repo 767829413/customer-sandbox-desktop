@@ -31,16 +31,22 @@ import {
 import {
   deleteFile,
   downloadFile,
+  FileNotTextError,
+  FilePreconditionFailedError,
+  FileTooLargeError,
   listAgents,
   listFiles,
+  loadFileContent,
   postApprovalResponse,
   postRun,
   resumeRun,
+  saveFileContent,
   type ApprovalDecision,
   type AgUiEvent,
   type FileEntry,
   type StreamHandle,
 } from "./lib/api";
+import { buildRunPrompt } from "./lib/fileEditor";
 
 // One Solid store for all UI-relevant state. Persistence is fanned out
 // to localStorage in `persist*` helpers — we don't observe the whole
@@ -70,6 +76,18 @@ interface AppState {
     errorMessage: string | null;
     truncated: boolean;
   };
+  fileEditor: {
+    open: boolean;
+    agent: string | null;
+    path: string | null;
+    text: string;
+    etag: string | null;
+    mime: string | null;
+    sizeBytes: number;
+    dirty: boolean;
+    loadingState: "idle" | "loading" | "saving" | "error";
+    errorMessage: string | null;
+  };
 }
 
 const initialSettings = loadSettings();
@@ -94,6 +112,18 @@ const [state, setState] = createStore<AppState>({
     loadingState: "idle",
     errorMessage: null,
     truncated: false,
+  },
+  fileEditor: {
+    open: false,
+    agent: null,
+    path: null,
+    text: "",
+    etag: null,
+    mime: null,
+    sizeBytes: 0,
+    dirty: false,
+    loadingState: "idle",
+    errorMessage: null,
   },
 });
 
@@ -386,6 +416,159 @@ export async function downloadWorkspaceFile(agent: string, path: string): Promis
     () => downloadFile(state.settings, agent, path),
     () => setState("errorBanner", UserFacingMessages.filesAutoHidden),
   );
+}
+
+export async function openFileEditor(agent: string, path: string): Promise<void> {
+  setState(
+    produce((s: AppState) => {
+      s.fileEditor.open = true;
+      s.fileEditor.agent = agent;
+      s.fileEditor.path = path;
+      s.fileEditor.text = "";
+      s.fileEditor.etag = null;
+      s.fileEditor.mime = null;
+      s.fileEditor.sizeBytes = 0;
+      s.fileEditor.dirty = false;
+      s.fileEditor.loadingState = "loading";
+      s.fileEditor.errorMessage = null;
+    }),
+  );
+  try {
+    const content = await loadFileContent(state.settings, agent, path);
+    setState(
+      produce((s: AppState) => {
+        // Guard against the user closing/switching the editor while
+        // the GET was in flight.
+        if (s.fileEditor.agent !== agent || s.fileEditor.path !== path) return;
+        s.fileEditor.text = content.text;
+        s.fileEditor.etag = content.etag;
+        s.fileEditor.mime = content.mime;
+        s.fileEditor.sizeBytes = content.sizeBytes;
+        s.fileEditor.loadingState = "idle";
+        s.fileEditor.errorMessage = null;
+      }),
+    );
+  } catch (err) {
+    const message =
+      err instanceof FileTooLargeError
+        ? "File is too large to edit (limit is 5 MB)."
+        : err instanceof FileNotTextError
+          ? "File is not UTF-8 text. Use Download to fetch the binary."
+          : err instanceof Error
+            ? err.message
+            : String(err);
+    setState(
+      produce((s: AppState) => {
+        if (s.fileEditor.agent !== agent || s.fileEditor.path !== path) return;
+        s.fileEditor.loadingState = "error";
+        s.fileEditor.errorMessage = message;
+      }),
+    );
+  }
+}
+
+export function closeFileEditor(): void {
+  setState(
+    produce((s: AppState) => {
+      s.fileEditor.open = false;
+      s.fileEditor.agent = null;
+      s.fileEditor.path = null;
+      s.fileEditor.text = "";
+      s.fileEditor.etag = null;
+      s.fileEditor.mime = null;
+      s.fileEditor.sizeBytes = 0;
+      s.fileEditor.dirty = false;
+      s.fileEditor.loadingState = "idle";
+      s.fileEditor.errorMessage = null;
+    }),
+  );
+}
+
+export function updateFileEditorText(text: string): void {
+  setState(
+    produce((s: AppState) => {
+      if (!s.fileEditor.open) return;
+      s.fileEditor.text = text;
+      s.fileEditor.dirty = true;
+    }),
+  );
+}
+
+/**
+ * Persist the editor buffer. Returns `true` on success so callers
+ * (e.g. Save & Run) can chain follow-up actions only when the write
+ * actually landed. Conflicts (412) are surfaced via `errorMessage`
+ * but never throw — the UI shows a banner with "force overwrite".
+ */
+export async function saveFileEditor(options: { force?: boolean } = {}): Promise<boolean> {
+  const { agent, path, text, etag } = state.fileEditor;
+  if (!agent || !path) return false;
+  setState(
+    produce((s: AppState) => {
+      s.fileEditor.loadingState = "saving";
+      s.fileEditor.errorMessage = null;
+    }),
+  );
+  try {
+    const result = await saveFileContent(state.settings, agent, path, text, {
+      ifMatchEtag: options.force ? null : etag,
+    });
+    setState(
+      produce((s: AppState) => {
+        if (s.fileEditor.agent !== agent || s.fileEditor.path !== path) return;
+        s.fileEditor.etag = result.etag;
+        s.fileEditor.sizeBytes = result.sizeBytes;
+        s.fileEditor.dirty = false;
+        s.fileEditor.loadingState = "idle";
+        s.fileEditor.errorMessage = null;
+      }),
+    );
+    // Reflect the new mtime/size in the drawer list if it's pinned to
+    // the same agent. Race-safe via `refreshFiles`'s own agent guard.
+    if (state.filesDrawer.open && state.filesDrawer.agent === agent) {
+      void refreshFiles();
+    }
+    return true;
+  } catch (err) {
+    const isConflict = err instanceof FilePreconditionFailedError;
+    const message = isConflict
+      ? "File was modified on disk since you opened it. Click Save again to overwrite."
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    setState(
+      produce((s: AppState) => {
+        if (s.fileEditor.agent !== agent || s.fileEditor.path !== path) return;
+        s.fileEditor.loadingState = "error";
+        s.fileEditor.errorMessage = message;
+        if (isConflict) {
+          // Drop the now-known-stale etag so the next Save click forces
+          // an overwrite via the `force: true` path the UI will use.
+          s.fileEditor.etag = null;
+        }
+      }),
+    );
+    return false;
+  }
+}
+
+export async function saveAndRunFileEditor(): Promise<void> {
+  const { agent, path } = state.fileEditor;
+  if (!agent || !path) return;
+  const thread = currentThread();
+  if (!thread || thread.agent !== agent) {
+    setState(
+      produce((s: AppState) => {
+        s.fileEditor.errorMessage = `Save & Run requires an active chat with agent "${agent}". Switch threads first.`;
+      }),
+    );
+    return;
+  }
+  const ok = await saveFileEditor();
+  if (!ok) return;
+  const prompt = buildRunPrompt(path);
+  closeFileEditor();
+  sendMessage(prompt);
 }
 
 export async function respondApproval(
