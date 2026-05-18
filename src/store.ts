@@ -106,9 +106,35 @@ const activeRunIdByThread = new Map<string, string>();
 export const store = state;
 void refreshAvailableAgents(initialSettings);
 
+// Keep the open Files drawer pinned to the active thread's agent.
+// Called from every entry point that mutates `currentThreadId`
+// (thread switch, new chat, delete). Without this, switching from a
+// zeptoclaw thread to a codex thread left the drawer showing the
+// previous agent's file list until the user manually closed/reopened
+// it — UX bug surfaced in 2026-05-18.
+function syncFilesDrawerToCurrentThread(): void {
+  if (!state.filesDrawer.open) return;
+  const agent = currentThread()?.agent ?? null;
+  if (agent === state.filesDrawer.agent) return;
+  setState(
+    produce((s: AppState) => {
+      s.filesDrawer.agent = agent;
+      // Drop stale entries immediately so the previous agent's files
+      // don't flash for the few hundred ms before refreshFiles lands.
+      s.filesDrawer.entries = [];
+      s.filesDrawer.truncated = false;
+      s.filesDrawer.errorMessage = null;
+    }),
+  );
+  if (agent) {
+    void refreshFiles();
+  }
+}
+
 export function setCurrentThread(threadId: string): void {
   setState("currentThreadId", threadId);
   persistThreads();
+  syncFilesDrawerToCurrentThread();
 }
 
 export function newThread(agent?: string): Thread {
@@ -127,6 +153,7 @@ export function newThread(agent?: string): Thread {
     }),
   );
   persistThreads();
+  syncFilesDrawerToCurrentThread();
   // If the agent catalog hasn't been confirmed yet (initial mount
   // failed because the gateway wasn't reachable), opportunistically
   // refresh it here. The dropdown self-heals the next time the user
@@ -151,6 +178,7 @@ export function deleteThread(threadId: string): void {
     }),
   );
   persistThreads();
+  syncFilesDrawerToCurrentThread();
 }
 
 export function updateSettings(s: Settings): void {
