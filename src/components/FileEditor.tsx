@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { EditorState, type Extension } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -19,14 +19,23 @@ export default function FileEditor() {
   let view: EditorView | undefined;
   const [langExt, setLangExt] = createSignal<Extension | null>(null);
 
-  // Track which (agent, path, dark) tuple the current EditorView is built
-  // for. CodeMirror is imperative, so we treardown + remount when these
-  // signals change rather than diffing in place.
-  const editorKey = createMemo(
-    () =>
-      `${store.fileEditor.agent ?? ""}::${store.fileEditor.path ?? ""}::${
-        prefersDark() ? "dark" : "light"
-      }::${langExt() ? "lang" : "plain"}`,
+  // CodeMirror is imperative; we tear down + remount only when its
+  // identity (which file, which theme, which language) actually
+  // changes. We deliberately do NOT depend on `store.fileEditor.text`
+  // here — that signal flips on every keystroke (via the update
+  // listener below), and remounting per keystroke would destroy focus
+  // and selection.
+  const mountKey = createMemo(() =>
+    [
+      store.fileEditor.agent ?? "",
+      store.fileEditor.path ?? "",
+      prefersDark() ? "dark" : "light",
+      langExt() ? "lang" : "plain",
+      store.fileEditor.open ? "open" : "closed",
+      // Collapse {idle, saving} → "ready" so a save round-trip
+      // doesn't unmount the editor mid-edit.
+      store.fileEditor.loadingState === "loading" ? "loading" : "ready",
+    ].join("::"),
   );
 
   createEffect(() => {
@@ -44,40 +53,42 @@ export default function FileEditor() {
     });
   });
 
-  // Mount / remount the EditorView whenever the keyed identity changes.
+  // Mount / remount the EditorView whenever the mount key changes.
+  // Everything inside `untrack` is read non-reactively so user input
+  // (which flips `store.fileEditor.text` and `.dirty`) does not
+  // re-enter this effect.
   createEffect(() => {
-    editorKey();
-    // Only mount once the modal is actually rendered AND content is
-    // ready (loadingState === "idle"). Trying to mount during
-    // "loading" gives the user a confusing empty editor.
-    if (!store.fileEditor.open || store.fileEditor.loadingState !== "idle") {
+    mountKey();
+    untrack(() => {
+      if (!store.fileEditor.open || store.fileEditor.loadingState === "loading") {
+        destroyView();
+        return;
+      }
+      if (!host) return;
       destroyView();
-      return;
-    }
-    if (!host) return;
-    destroyView();
-    const extensions: Extension[] = [
-      lineNumbers(),
-      history(),
-      indentOnInput(),
-      bracketMatching(),
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
-      EditorView.lineWrapping,
-      EditorView.updateListener.of((u) => {
-        if (u.docChanged) {
-          updateFileEditorText(u.state.doc.toString());
-        }
-      }),
-    ];
-    if (prefersDark()) extensions.push(oneDark);
-    const lang = langExt();
-    if (lang) extensions.push(lang);
-    view = new EditorView({
-      state: EditorState.create({
-        doc: store.fileEditor.text,
-        extensions,
-      }),
-      parent: host,
+      const extensions: Extension[] = [
+        lineNumbers(),
+        history(),
+        indentOnInput(),
+        bracketMatching(),
+        keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+        EditorView.lineWrapping,
+        EditorView.updateListener.of((u) => {
+          if (u.docChanged) {
+            updateFileEditorText(u.state.doc.toString());
+          }
+        }),
+      ];
+      if (prefersDark()) extensions.push(oneDark);
+      const lang = langExt();
+      if (lang) extensions.push(lang);
+      view = new EditorView({
+        state: EditorState.create({
+          doc: store.fileEditor.text,
+          extensions,
+        }),
+        parent: host,
+      });
     });
   });
 

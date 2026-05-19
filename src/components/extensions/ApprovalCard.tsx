@@ -106,20 +106,22 @@ export default function ApprovalCard(props: Props) {
         >
           Deny
         </button>
-        <button
-          class="rounded border border-emerald-600 px-2 py-1 text-[11px] font-medium text-emerald-700 disabled:opacity-50 dark:text-emerald-300"
-          disabled={busyDecision() !== null || resolvedDecision() !== null || approvalApiUnsupported()}
-          onClick={() => void onDecision("approve_all")}
-        >
-          Approve all
-        </button>
-        <button
-          class="rounded border border-red-600 px-2 py-1 text-[11px] font-medium text-red-700 disabled:opacity-50 dark:text-red-300"
-          disabled={busyDecision() !== null || resolvedDecision() !== null || approvalApiUnsupported()}
-          onClick={() => void onDecision("deny_all")}
-        >
-          Deny all
-        </button>
+      </div>
+
+      {/* Approval mode is a thread-level setting in zeptoclaw, not a
+          per-decision choice. We expose it through the chat command
+          channel so it stays the single source of truth (state lives
+          on the agent, not on the client). */}
+      <div class="mt-2 text-[11px] text-neutral-500 dark:text-neutral-400">
+        Tip: send{" "}
+        <code class="rounded bg-neutral-200 px-1 py-px font-mono text-[10px] dark:bg-neutral-800">
+          /skip_approval
+        </code>{" "}
+        in chat to auto-approve future tools for this chat. Use{" "}
+        <code class="rounded bg-neutral-200 px-1 py-px font-mono text-[10px] dark:bg-neutral-800">
+          /require_approval
+        </code>{" "}
+        to turn approvals back on.
       </div>
 
       <Show when={approvalApiUnsupported()}>
