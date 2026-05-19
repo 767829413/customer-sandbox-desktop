@@ -106,6 +106,25 @@ export default function FilesDrawer() {
             {store.filesDrawer.entries.length} item(s)
             <Show when={store.filesDrawer.truncated}> · truncated</Show>
           </span>
+          <span
+            class="ml-auto flex items-center gap-1 text-[11px]"
+            title={streamStateTooltip(store.filesDrawer.streamState)}
+          >
+            <span
+              class="inline-block h-2 w-2 rounded-full"
+              classList={{
+                "bg-emerald-500": store.filesDrawer.streamState === "live",
+                "bg-amber-500 animate-pulse":
+                  store.filesDrawer.streamState === "connecting",
+                "bg-neutral-400": store.filesDrawer.streamState === "polling",
+                "bg-neutral-300 dark:bg-neutral-600":
+                  store.filesDrawer.streamState === "off",
+              }}
+            />
+            <span class="text-neutral-500 dark:text-neutral-400">
+              {streamStateLabel(store.filesDrawer.streamState)}
+            </span>
+          </span>
         </div>
 
         <div class="flex-1 overflow-y-auto px-3 py-2">
@@ -218,4 +237,30 @@ function formatBytes(value: number): string {
 function formatTime(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "unknown time";
   return new Date(ms).toLocaleString();
+}
+
+function streamStateLabel(s: "off" | "connecting" | "live" | "polling"): string {
+  switch (s) {
+    case "live":
+      return "live";
+    case "connecting":
+      return "connecting…";
+    case "polling":
+      return "polling";
+    case "off":
+      return "off";
+  }
+}
+
+function streamStateTooltip(s: "off" | "connecting" | "live" | "polling"): string {
+  switch (s) {
+    case "live":
+      return "Real-time updates active — file list reflects sandbox changes within a moment.";
+    case "connecting":
+      return "Opening real-time stream…";
+    case "polling":
+      return "Real-time stream unavailable — click Refresh to update.";
+    case "off":
+      return "Drawer is idle.";
+  }
 }

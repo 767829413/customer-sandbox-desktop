@@ -47,6 +47,7 @@ import {
   type FileEntry,
   type StreamHandle,
 } from "./lib/api";
+import { openFilesStream, type FilesStreamHandle } from "./lib/filesStream";
 import { buildRunPrompt } from "./lib/fileEditor";
 
 // One Solid store for all UI-relevant state. Persistence is fanned out
@@ -57,6 +58,12 @@ interface AppState {
   capabilities: {
     agentsApi: CapabilityStatus;
     filesApi: CapabilityStatus;
+    /**
+     * `/v1/files/events` SSE support. `unsupported` (404) means the
+     * gateway is too old; we permanently fall back to one-shot
+     * `listFiles` polling for this session.
+     */
+    filesEvents: CapabilityStatus;
     approvalApi: CapabilityStatus;
   };
   settings: Settings;
@@ -76,6 +83,13 @@ interface AppState {
     loadingState: "idle" | "loading" | "error";
     errorMessage: string | null;
     truncated: boolean;
+    /**
+     * Realtime stream status. `off` when drawer is closed. `connecting`
+     * after open() before the snapshot arrives. `live` while an SSE
+     * stream is active. `polling` when SSE is unavailable (old gateway
+     * / network issue) and we fall back to on-demand list refresh.
+     */
+    streamState: "off" | "connecting" | "live" | "polling";
   };
   fileEditor: {
     open: boolean;
@@ -97,6 +111,7 @@ const [state, setState] = createStore<AppState>({
   capabilities: {
     agentsApi: "unknown",
     filesApi: "unknown",
+    filesEvents: "unknown",
     approvalApi: "unknown",
   },
   settings: initialSettings,
@@ -113,6 +128,7 @@ const [state, setState] = createStore<AppState>({
     loadingState: "idle",
     errorMessage: null,
     truncated: false,
+    streamState: "off",
   },
   fileEditor: {
     open: false,
@@ -134,6 +150,144 @@ const [activeStream, setActiveStream] = createSignal<StreamHandle | null>(null);
 let activeRunId: string | null = null;
 const activeRunIdByThread = new Map<string, string>();
 
+// Realtime files-events SSE handle. At most one active at a time —
+// switched whenever drawer agent changes or drawer closes.
+let filesStreamHandle: FilesStreamHandle | null = null;
+let filesStreamAgent: string | null = null;
+
+function stopFilesStream(): void {
+  if (filesStreamHandle) {
+    filesStreamHandle.close();
+    filesStreamHandle = null;
+  }
+  filesStreamAgent = null;
+}
+
+/**
+ * Start the workspace fs SSE stream for `agent` and wire its callbacks
+ * to mutate `state.filesDrawer`. Safe to call repeatedly: a stale
+ * stream for a different agent is closed first.
+ *
+ * On `unsupported`/error → marks `filesEvents` capability accordingly
+ * and falls back to one-shot `refreshFiles()` polling.
+ */
+function startFilesStream(agent: string): void {
+  if (filesStreamHandle && filesStreamAgent === agent) return;
+  stopFilesStream();
+
+  if (state.capabilities.filesEvents === "unsupported") {
+    // Permanent fallback for this session — gateway is too old.
+    setState("filesDrawer", "streamState", "polling");
+    void refreshFiles();
+    return;
+  }
+
+  setState(
+    produce((s: AppState) => {
+      s.filesDrawer.streamState = "connecting";
+      s.filesDrawer.loadingState = "loading";
+      s.filesDrawer.errorMessage = null;
+    }),
+  );
+
+  filesStreamAgent = agent;
+  const handle = openFilesStream(state.settings, agent, {
+    onSnapshot: (files) => {
+      setState(
+        produce((s: AppState) => {
+          if (s.filesDrawer.agent !== agent) return;
+          s.filesDrawer.entries = files;
+          s.filesDrawer.truncated = false;
+          s.filesDrawer.loadingState = "idle";
+          s.filesDrawer.errorMessage = null;
+          s.filesDrawer.streamState = "live";
+        }),
+      );
+      markCapability("filesEvents", "supported");
+      markCapability("filesApi", "supported");
+    },
+    onUpsert: (file) => {
+      setState(
+        produce((s: AppState) => {
+          if (s.filesDrawer.agent !== agent) return;
+          const idx = s.filesDrawer.entries.findIndex((e) => e.path === file.path);
+          if (idx === -1) {
+            s.filesDrawer.entries.push(file);
+          } else {
+            s.filesDrawer.entries[idx] = file;
+          }
+          // Match the list endpoint's sort: most-recently-modified first,
+          // ties broken by path. Keeps the drawer stable as edits stream
+          // in.
+          s.filesDrawer.entries.sort((a, b) => {
+            if (b.mtimeMs !== a.mtimeMs) return b.mtimeMs - a.mtimeMs;
+            return a.path.localeCompare(b.path);
+          });
+        }),
+      );
+    },
+    onRemoved: (path) => {
+      setState(
+        produce((s: AppState) => {
+          if (s.filesDrawer.agent !== agent) return;
+          s.filesDrawer.entries = s.filesDrawer.entries.filter((e) => e.path !== path);
+        }),
+      );
+    },
+    onUnsupported: (status) => {
+      // 404 → endpoint absent (old gateway). 503 → watcher couldn't
+      // boot (fd exhaustion etc.) — also degrade for this session.
+      // Either way: fall back to polling.
+      if (status === 404 || status === 405) {
+        markCapability("filesEvents", "unsupported");
+      }
+      filesStreamHandle = null;
+      filesStreamAgent = null;
+      setState(
+        produce((s: AppState) => {
+          if (s.filesDrawer.agent !== agent) return;
+          s.filesDrawer.streamState = "polling";
+        }),
+      );
+      void refreshFiles();
+    },
+    onError: (err) => {
+      // Network-level failure mid-stream. Surface a hint in the banner
+      // (silent fallback hides real outages) and degrade to polling.
+      filesStreamHandle = null;
+      filesStreamAgent = null;
+      setState(
+        produce((s: AppState) => {
+          if (s.filesDrawer.agent !== agent) return;
+          s.filesDrawer.streamState = "polling";
+        }),
+      );
+      // Don't spam the banner if drawer already moved on (e.g. user
+      // switched threads).
+      if (state.filesDrawer.open && state.filesDrawer.agent === agent) {
+        setState("errorBanner", `Live file updates paused (${err.message}). Using polling.`);
+        void refreshFiles();
+      }
+    },
+    onClose: () => {
+      // Server-side graceful close (e.g. gateway restart). Degrade so
+      // we don't loop hot — user can hit Refresh to recover, or the
+      // next drawer open will retry SSE.
+      filesStreamHandle = null;
+      filesStreamAgent = null;
+      setState(
+        produce((s: AppState) => {
+          if (s.filesDrawer.agent !== agent) return;
+          if (s.filesDrawer.streamState === "live") {
+            s.filesDrawer.streamState = "polling";
+          }
+        }),
+      );
+    },
+  });
+  filesStreamHandle = handle;
+}
+
 export const store = state;
 void refreshAvailableAgents(initialSettings);
 
@@ -151,14 +305,17 @@ function syncFilesDrawerToCurrentThread(): void {
     produce((s: AppState) => {
       s.filesDrawer.agent = agent;
       // Drop stale entries immediately so the previous agent's files
-      // don't flash for the few hundred ms before refreshFiles lands.
+      // don't flash for the few hundred ms before the new snapshot
+      // arrives.
       s.filesDrawer.entries = [];
       s.filesDrawer.truncated = false;
       s.filesDrawer.errorMessage = null;
+      s.filesDrawer.streamState = "off";
     }),
   );
+  stopFilesStream();
   if (agent) {
-    void refreshFiles();
+    startFilesStream(agent);
   }
 }
 
@@ -213,11 +370,15 @@ export function deleteThread(threadId: string): void {
 }
 
 export function updateSettings(s: Settings): void {
+  // New gateway endpoint → reset the SSE stream so the next drawer
+  // open re-discovers capability against the new URL/token.
+  stopFilesStream();
   setState(
     produce((st: AppState) => {
       st.settings = s;
       st.capabilities.agentsApi = "unknown";
       st.capabilities.filesApi = "unknown";
+      st.capabilities.filesEvents = "unknown";
       st.capabilities.approvalApi = "unknown";
       st.filesDrawer.open = false;
       st.filesDrawer.agent = null;
@@ -225,6 +386,7 @@ export function updateSettings(s: Settings): void {
       st.filesDrawer.errorMessage = null;
       st.filesDrawer.loadingState = "idle";
       st.filesDrawer.truncated = false;
+      st.filesDrawer.streamState = "off";
     }),
   );
   saveSettings(s);
@@ -332,15 +494,17 @@ export function openFilesDrawer(agent: string): void {
       s.filesDrawer.errorMessage = null;
     }),
   );
-  void refreshFiles();
+  startFilesStream(agent);
 }
 
 export function closeFilesDrawer(): void {
+  stopFilesStream();
   setState(
     produce((s: AppState) => {
       s.filesDrawer.open = false;
       s.filesDrawer.loadingState = "idle";
       s.filesDrawer.errorMessage = null;
+      s.filesDrawer.streamState = "off";
     }),
   );
 }
@@ -370,12 +534,14 @@ export async function refreshFiles(): Promise<void> {
     const unsupported = isUnsupportedEndpointError(err);
     if (unsupported) {
       markCapability("filesApi", "unsupported");
+      stopFilesStream();
       setState(
         produce((s: AppState) => {
           if (s.filesDrawer.agent !== agent) return;
           s.filesDrawer.open = false;
           s.filesDrawer.loadingState = "idle";
           s.filesDrawer.errorMessage = null;
+          s.filesDrawer.streamState = "off";
         }),
       );
       setState("errorBanner", UserFacingMessages.filesAutoHidden);
