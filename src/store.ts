@@ -100,6 +100,7 @@ interface AppState {
     mime: string | null;
     sizeBytes: number;
     dirty: boolean;
+    conflict: boolean;
     loadingState: "idle" | "loading" | "saving" | "error";
     errorMessage: string | null;
   };
@@ -139,6 +140,7 @@ const [state, setState] = createStore<AppState>({
     mime: null,
     sizeBytes: 0,
     dirty: false,
+    conflict: false,
     loadingState: "idle",
     errorMessage: null,
   },
@@ -596,6 +598,7 @@ export async function openFileEditor(agent: string, path: string): Promise<void>
       s.fileEditor.mime = null;
       s.fileEditor.sizeBytes = 0;
       s.fileEditor.dirty = false;
+      s.fileEditor.conflict = false;
       s.fileEditor.loadingState = "loading";
       s.fileEditor.errorMessage = null;
     }),
@@ -611,6 +614,7 @@ export async function openFileEditor(agent: string, path: string): Promise<void>
         s.fileEditor.etag = content.etag;
         s.fileEditor.mime = content.mime;
         s.fileEditor.sizeBytes = content.sizeBytes;
+        s.fileEditor.conflict = false;
         s.fileEditor.loadingState = "idle";
         s.fileEditor.errorMessage = null;
       }),
@@ -655,6 +659,7 @@ export function closeFileEditor(): void {
       s.fileEditor.mime = null;
       s.fileEditor.sizeBytes = 0;
       s.fileEditor.dirty = false;
+      s.fileEditor.conflict = false;
       s.fileEditor.loadingState = "idle";
       s.fileEditor.errorMessage = null;
     }),
@@ -675,11 +680,22 @@ export function updateFileEditorText(text: string): void {
  * Persist the editor buffer. Returns `true` on success so callers
  * (e.g. Save & Run) can chain follow-up actions only when the write
  * actually landed. Conflicts (412) are surfaced via `errorMessage`
- * but never throw — the UI shows a banner with "force overwrite".
+ * but never throw; the UI requires an explicit Reload or Overwrite.
  */
 export async function saveFileEditor(options: { force?: boolean } = {}): Promise<boolean> {
   const { agent, path, text, etag } = state.fileEditor;
   if (!agent || !path) return false;
+  if (state.fileEditor.conflict && !options.force) {
+    setState(
+      produce((s: AppState) => {
+        if (s.fileEditor.agent !== agent || s.fileEditor.path !== path) return;
+        s.fileEditor.loadingState = "error";
+        s.fileEditor.errorMessage =
+          "File changed outside this editor. Reload to review changes or Overwrite to replace it.";
+      }),
+    );
+    return false;
+  }
   setState(
     produce((s: AppState) => {
       s.fileEditor.loadingState = "saving";
@@ -696,6 +712,7 @@ export async function saveFileEditor(options: { force?: boolean } = {}): Promise
         s.fileEditor.etag = result.etag;
         s.fileEditor.sizeBytes = result.sizeBytes;
         s.fileEditor.dirty = false;
+        s.fileEditor.conflict = false;
         s.fileEditor.loadingState = "idle";
         s.fileEditor.errorMessage = null;
       }),
@@ -710,7 +727,7 @@ export async function saveFileEditor(options: { force?: boolean } = {}): Promise
     const isConflict = err instanceof FilePreconditionFailedError;
     const isMissing = err instanceof FileMissingError;
     const message = isConflict
-      ? "File was modified on disk since you opened it. Click Save again to overwrite."
+      ? "File changed outside this editor. Reload to review changes or Overwrite to replace it."
       : isMissing
         ? `${(err as FileMissingError).message} Cannot save here.`
         : err instanceof Error
@@ -722,14 +739,18 @@ export async function saveFileEditor(options: { force?: boolean } = {}): Promise
         s.fileEditor.loadingState = "error";
         s.fileEditor.errorMessage = message;
         if (isConflict) {
-          // Drop the now-known-stale etag so the next Save click forces
-          // an overwrite via the `force: true` path the UI will use.
-          s.fileEditor.etag = null;
+          s.fileEditor.conflict = true;
         }
       }),
     );
     return false;
   }
+}
+
+export async function reloadFileEditor(): Promise<void> {
+  const { agent, path } = state.fileEditor;
+  if (!agent || !path) return;
+  await openFileEditor(agent, path);
 }
 
 export async function saveAndRunFileEditor(): Promise<void> {

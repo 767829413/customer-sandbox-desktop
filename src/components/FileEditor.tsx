@@ -7,6 +7,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 
 import {
   closeFileEditor,
+  reloadFileEditor,
   saveFileEditor,
   saveAndRunFileEditor,
   store,
@@ -125,6 +126,16 @@ export default function FileEditor() {
     }
   };
 
+  const handleReload = () => {
+    if (
+      store.fileEditor.dirty &&
+      !window.confirm("Reload from disk and discard your unsaved changes?")
+    ) {
+      return;
+    }
+    void reloadFileEditor();
+  };
+
   return (
     <Show when={store.fileEditor.open}>
       <div
@@ -172,8 +183,26 @@ export default function FileEditor() {
 
           <Show when={store.fileEditor.errorMessage}>
             {(msg) => (
-              <div class="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/30 dark:text-red-200">
-                {msg()}
+              <div class="flex items-center justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-900/30 dark:text-red-200">
+                <span>{msg()}</span>
+                <Show when={store.fileEditor.conflict}>
+                  <span class="flex shrink-0 items-center gap-2">
+                    <button
+                      class="rounded border border-red-300 px-2 py-1 hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900/50"
+                      onClick={handleReload}
+                      disabled={store.fileEditor.loadingState === "saving"}
+                    >
+                      Reload
+                    </button>
+                    <button
+                      class="rounded bg-red-600 px-2 py-1 font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                      onClick={() => void saveFileEditor({ force: true })}
+                      disabled={store.fileEditor.loadingState === "saving"}
+                    >
+                      Overwrite
+                    </button>
+                  </span>
+                </Show>
               </div>
             )}
           </Show>
@@ -211,7 +240,9 @@ export default function FileEditor() {
                 class="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                 onClick={() => void saveFileEditor()}
                 disabled={
-                  store.fileEditor.loadingState !== "idle" || !store.fileEditor.dirty
+                  store.fileEditor.loadingState !== "idle" ||
+                  !store.fileEditor.dirty ||
+                  store.fileEditor.conflict
                 }
               >
                 {store.fileEditor.loadingState === "saving" ? "Saving…" : "Save"}
@@ -221,6 +252,7 @@ export default function FileEditor() {
                 onClick={() => void saveAndRunFileEditor()}
                 disabled={
                   store.fileEditor.loadingState !== "idle" ||
+                  store.fileEditor.conflict ||
                   !sameAgentAsThread() ||
                   store.isStreaming
                 }
